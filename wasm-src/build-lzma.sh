@@ -1,8 +1,9 @@
 #!/bin/sh
 # Build lzma.wasm from lzma_wasm.c + LZMA SDK LzmaDec/Lzma2Dec/Bra86.
 # Requires clang with a wasm32 target (Ubuntu: apt install clang).
-# Output: ../lzma.wasm (checked into the repo via the browser upload
-# page, like nup.wasm — snapshot push cannot carry binary files).
+# Output: ../lzma.wasm plus the embedded bytes in ../lzma.js.
+# The browser uses lzma.js; publish that module after rebuilding.
+# Requires Python 3 for the text-asset generation below.
 set -eu
 cd "$(dirname "$0")"
 clang --target=wasm32 -O3 -nostdlib -fno-builtin \
