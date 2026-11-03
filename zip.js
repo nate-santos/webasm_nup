@@ -167,9 +167,19 @@ function zipEntrySource(file, entry) {
     async *chunks() {
       const start = await resolveDataOffset();
       let crc = 0xffffffff, produced = 0;
+      // Over-yield guard: if the stream produces more than the central
+      // directory promises, fail HERE naming the entry. Without this,
+      // the packer feeds the excess to zstd (pledged at the declared
+      // size) and fails with a cryptic "zstd_feed failed (-1)" instead.
+      const checkOver = (n) => {
+        if (produced + n > entry.uncompSize) {
+          throw new Error(`zip entry "${entry.name}": decompressed more than its recorded ${entry.uncompSize} bytes (central directory size is wrong or the archive is corrupt)`);
+        }
+      };
       if (entry.method === METHOD_STORED) {
         for (let off = 0; off < entry.compSize; off += CHUNK) {
           const chunk = new Uint8Array(await file.slice(start + off, start + Math.min(entry.compSize, off + CHUNK)).arrayBuffer());
+          checkOver(chunk.length);
           crc = crc32Update(crc, chunk); produced += chunk.length;
           yield chunk;
         }
@@ -194,12 +204,17 @@ function zipEntrySource(file, entry) {
           for (;;) {
             const { done, value } = await reader.read();
             if (done) break;
+            checkOver(value.length);
             crc = crc32Update(crc, value); produced += value.length;
             yield value;
           }
         } catch (e) {
           try { await reader.cancel(); } catch { /* already closed */ }
           await pump;
+          // Errors already naming the entry (e.g. the over-yield guard
+          // above) pass through unwrapped; anything else is a genuine
+          // decompression failure.
+          if (e.message.startsWith("zip entry ")) throw e;
           throw new Error(`zip entry "${entry.name}": decompression failed (${e.message})`);
         }
         await pump;

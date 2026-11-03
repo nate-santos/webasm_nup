@@ -67,7 +67,9 @@ function buildZip(entries, { forceZip64 = false } = {}) {
     central.writeUInt16LE(e.method, 10);
     central.writeUInt32LE(crc, 16);
     central.writeUInt32LE(zip64 ? 0xffffffff : data.length, 20);
-    central.writeUInt32LE(zip64 ? 0xffffffff : e.data.length, 24);
+    // centralUncomp lets a test lie about the recorded size while the
+    // actual stream stays honest (and CRC-valid).
+    central.writeUInt32LE(zip64 ? 0xffffffff : (e.centralUncomp !== undefined ? e.centralUncomp : e.data.length), 24);
     central.writeUInt16LE(name.length, 28);
     const centralExtra = zip64 ? Buffer.alloc(28) : Buffer.alloc(0);
     if (zip64) {
@@ -226,6 +228,34 @@ async function main() {
     check(false, "non-zip: openZip should have thrown");
   } catch (e) {
     check(/not a zip/.test(e.message), `non-zip: clear error (got: ${e.message})`);
+  }
+  // Lied central-directory sizes: the packer pledges the recorded size
+  // to zstd, so an over-yielding stream used to die as the cryptic
+  // "zstd_feed failed (-1)". Both directions must now fail clearly,
+  // naming the size problem and never mentioning zstd.
+  for (const [label, centralUncomp, pattern] of [
+    ["lied-smaller", 5000, /decompressed more than its recorded 5000 bytes/],
+    ["lied-larger", 20000, /20000/],
+  ]) {
+    const liedData = Buffer.from("hello world ".repeat(800)); // 9600 bytes
+    const lied = buildZip([{ name: "base/romfs/lie.bin", method: 8, data: liedData, centralUncomp }]);
+    try {
+      const zl = await openZip(fileLike("lie.zip", lied.buf));
+      const baseL = zl.root.children.find((c) => c.children && c.name === "base");
+      const fh = await fs.open(join(root, "test", "test-zip-lied.nup"), "w");
+      await packNup(wasm, [{
+        kind: 0, titleId: 0x0100000000010000n, version: 0x10000, flags: 0,
+        root: { name: "", children: baseL.children }, npdm, buildId: null, sourceName: "zip-test",
+      }], {
+        writeAt: (pos, data) => fh.write(data, 0, data.length, pos),
+        truncate: (size) => fh.truncate(size),
+        close: () => fh.close(),
+      }, { level: 1 });
+      check(false, `${label}: packing should have thrown`);
+    } catch (e) {
+      check(pattern.test(e.message) && !/zstd_feed/.test(e.message),
+        `${label}: clear size error, no wasm error (got: ${e.message})`);
+    }
   }
   console.log(failures ? `${failures} check(s) FAILED` : "all zip checks passed");
   process.exit(failures ? 1 : 0);

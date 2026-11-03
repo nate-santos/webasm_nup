@@ -319,10 +319,22 @@ export async function packNup(wasm, packages, output, options = {}) {
       continue;
     }
     // Dedup pre-check: only a size seen before can be a duplicate.
+    // A stream that yields more than the declared size is a corrupt
+    // input (or a file that changed mid-run) — fail here naming the
+    // file, instead of letting the compress pass feed the excess to
+    // zstd (pledged at the declared size) and die with "zstd_feed
+    // failed (-1)".
+    const sizeMismatch = (got) => `${f.path}: stream produced ${got} bytes, expected ${size} bytes — the input file changed during conversion, or the archive's recorded size is wrong`;
     if (sizesSeen.has(size)) {
+      let hashed = 0;
       const sha = await wasm.hashStream((async function* () {
-        for await (const c of f.file.chunks()) { bytesDone += c.length; progress("hashing (dedup check)", f.path); yield c; }
+        for await (const c of f.file.chunks()) {
+          hashed += c.length;
+          if (hashed > size) throw new Error(sizeMismatch(`more than ${size}`));
+          bytesDone += c.length; progress("hashing (dedup check)", f.path); yield c;
+        }
       })());
+      if (hashed !== size) throw new Error(sizeMismatch(hashed));
       const hit = dedup.get(hex(sha));
       if (hit && hit.size === size) {
         rec.sha = sha; rec.offset = hit.offset; rec.stored = hit.stored; rec.codec = hit.codec;
@@ -339,11 +351,13 @@ export async function packNup(wasm, packages, output, options = {}) {
       // One pass: hash + compress, writing the extent as we go.
       wasm.zstdBegin(size, level);
       wasm.shaInit();
-      let stored = 0, aborted = false, outPos = start;
+      let stored = 0, aborted = false, outPos = start, fed = 0;
       let sampleBytes = 0, sampleStored = 0, sampleDecided = false;
       const useSampling = size > SAMPLE_MIN_SIZE;
       for await (const chunk of f.file.chunks()) {
         checkCancel();
+        fed += chunk.length;
+        if (fed > size) throw new Error(sizeMismatch(`more than ${size}`));
         wasm.shaUpdate(chunk);
         const out = wasm.zstdFeed(chunk, false);
         if (out.length) { await output.writeAt(outPos, out); outPos += out.length; stored += out.length; }
@@ -363,6 +377,7 @@ export async function packNup(wasm, packages, output, options = {}) {
         if (stored >= size) { aborted = true; break; }
       }
       if (!aborted) {
+        if (fed !== size) throw new Error(sizeMismatch(fed));
         const tail = wasm.zstdFeed(new Uint8Array(0), true);
         if (tail.length) { await output.writeAt(outPos, tail); outPos += tail.length; stored += tail.length; }
         aborted = stored >= size;
@@ -373,11 +388,13 @@ export async function packNup(wasm, packages, output, options = {}) {
         let wpos = start;
         for await (const chunk of f.file.chunks()) {
           checkCancel();
+          if (wpos - start + chunk.length > size) throw new Error(sizeMismatch(`more than ${size}`));
           wasm.shaUpdate(chunk);
           await output.writeAt(wpos, chunk);
           wpos += chunk.length;
           progress("writing raw (incompressible)", f.path);
         }
+        if (wpos - start !== size) throw new Error(sizeMismatch(wpos - start));
         rec.sha = wasm.shaFinal();
         // Zero any compressed tail past the raw extent.
         if (stored > size) {
@@ -404,12 +421,14 @@ export async function packNup(wasm, packages, output, options = {}) {
       let wpos = start;
       for await (const chunk of f.file.chunks()) {
         checkCancel();
+        if (wpos - start + chunk.length > size) throw new Error(sizeMismatch(`more than ${size}`));
         wasm.shaUpdate(chunk);
         await output.writeAt(wpos, chunk);
         wpos += chunk.length;
         bytesDone += chunk.length;
         progress("writing raw (large file)", f.path);
       }
+      if (wpos - start !== size) throw new Error(sizeMismatch(wpos - start));
       const sha = wasm.shaFinal();
       const hit = dedup.get(hex(sha));
       if (hit && hit.size === size) {
