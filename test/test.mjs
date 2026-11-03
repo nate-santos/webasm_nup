@@ -7,6 +7,10 @@
 // (title, display version, icon) and the UUID. This is a regression
 // check, not a substitute for the reference verifier — see README for
 // running the reference Python tool's `nup verify` on test-out.nup.
+// Also covers very small files (1 byte up, in base/romfs/tiny/) and a
+// many-varying-size pack (the old wasm bump allocator leaked one zstd
+// workspace per pledged-size change and died with "zstd_feed failed
+// (-1)" after ~120-190 such files).
 import { promises as fs } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { join, dirname } from "node:path";
@@ -73,6 +77,27 @@ async function buildDump() {
   // -> zstd. 6 MiB each keeps the test fast while crossing the floor.
   await write("base/romfs/rand6.bin", randomBytes(6 * 1024 * 1024));
   await write("base/romfs/rep6.bin", Buffer.from("abcd1234 ".repeat((6 * 1024 * 1024) / 9)));
+  // Very small files, in their own directory: frame overhead exceeds
+  // the smallest ones (so they must fall back to raw), identical tiny
+  // sizes exercise the dedup pre-check both ways (same content ->
+  // shared extent; different content -> separate extents), and the
+  // bulk set repeats sizes 1..64 with different fill bytes.
+  await write("base/romfs/tiny/one.bin", Buffer.from("A"));
+  await write("base/romfs/tiny/two.bin", Buffer.from("AB"));
+  await write("base/romfs/tiny/three.bin", Buffer.from("ABC"));
+  await write("base/romfs/tiny/ten.bin", Buffer.from("0123456789"));
+  await write("base/romfs/tiny/hundred.bin", Buffer.from("x".repeat(100)));
+  await write("base/romfs/tiny/kilo.bin", Buffer.from("y".repeat(1000)));
+  await write("base/romfs/tiny/dup-a.bin", Buffer.from("dup!dup"));
+  await write("base/romfs/tiny/dup-b.bin", Buffer.from("dup!dup"));
+  await write("base/romfs/tiny/same5-a.bin", Buffer.from("AAAAA"));
+  await write("base/romfs/tiny/same5-b.bin", Buffer.from("BBBBB"));
+  await write("base/romfs/tiny/nested/mini.bin", Buffer.from("Z"));
+  await write("base/romfs/tiny/empty2.txt", Buffer.alloc(0));
+  for (let i = 0; i < 120; i++) {
+    const size = (i % 64) + 1;
+    await write(`base/romfs/tiny/bulk/bulk-${String(i).padStart(3, "0")}.bin`, Buffer.alloc(size, i & 0xff));
+  }
   return { npdm, main };
 }
 async function scanDir(dir, name) {
@@ -217,6 +242,28 @@ async function main() {
   const uuid = createHash("sha256").update(uuidIn).digest().subarray(0, 16);
   check(Buffer.compare(Buffer.from(uuid), Buffer.from(data.subarray(0x50, 0x60))) === 0, "UUID matches §2.1");
   check(sortedOk, "children sorted bytewise per directory");
+  // --- tiny files (in the first pack; raw SHAs are already checked by
+  // the raw-SHA loop above for every codec-0 file) ---
+  const tiny = (n) => files[fileNames.indexOf(n)];
+  check(fileNames.includes("one.bin") && fileNames.includes("two.bin") && fileNames.includes("three.bin"), "tiny files present");
+  for (const [n, sz] of [["one.bin", 1], ["two.bin", 2], ["three.bin", 3], ["ten.bin", 10]]) {
+    const f = tiny(n);
+    check(f && f.size === sz && f.codec === 0 && f.stored === sz, `tiny ${n} stored raw (frame overhead exceeds ${sz} bytes)`);
+  }
+  for (const [n, sz] of [["hundred.bin", 100], ["kilo.bin", 1000]]) {
+    const f = tiny(n);
+    check(f && f.size === sz && f.codec === 1 && f.stored < sz, `tiny repetitive ${n} compresses with zstd`);
+  }
+  const dupA = tiny("dup-a.bin"), dupB = tiny("dup-b.bin");
+  check(dupA && dupB && dupA.off === dupB.off && dupA.stored === dupB.stored, "identical tiny files share one extent");
+  const s5a = tiny("same5-a.bin"), s5b = tiny("same5-b.bin");
+  check(s5a && s5b && s5a.off !== s5b.off && s5a.size === 5 && s5b.size === 5, "same-size different-content tiny files get separate extents");
+  const bulkCount = fileNames.filter((n) => n.startsWith("bulk-")).length;
+  check(bulkCount === 120, `bulk tiny files count ${bulkCount} == 120`);
+  const mini = tiny("mini.bin");
+  check(mini && mini.size === 1 && mini.codec === 0, "nested tiny file stored raw");
+  const empty2 = tiny("empty2.txt");
+  check(empty2 && empty2.off === 0 && empty2.stored === 0, "tiny-dir empty file has no extent");
 
   // --- second pack: sampling + level 1, default raw threshold ---
   // Same packages, but files over 256 MiB would be raw anyway; here the
@@ -241,6 +288,33 @@ async function main() {
     const got = createHash("sha256").update(data2.subarray(rand6.off, rand6.off + rand6.size)).digest();
     check(Buffer.compare(got, rand6.sha) === 0, "sampling: raw SHA matches for rand6.bin");
   }
+
+  // --- third pack: many varying-size files (heap-exhaustion regression) ---
+  // Same shape as the repro that failed before the free-list allocator:
+  // 300 files, sizes varying file to file, alternating incompressible
+  // and compressible. Must complete without "zstd_feed failed (-1)".
+  const manyChildren = [];
+  for (let i = 0; i < 300; i++) {
+    const size = 60000 + (i % 1000);
+    const data = i % 2 === 0
+      ? randomBytes(size)
+      : Buffer.from("hello world ".repeat(Math.ceil(size / 12)).slice(0, size));
+    manyChildren.push({ name: `m${i}.bin`, file: { size, async *chunks() { yield data; } } });
+  }
+  const outPath3 = join(root, "test", "test-out-many.nup");
+  const fh3 = await fs.open(outPath3, "w");
+  await packNup(wasm, [
+    { kind: 0, titleId, version: 0x10000, flags: 0, root: { name: "", children: manyChildren }, npdm, buildId: null, sourceName: "many-test" },
+  ], {
+    writeAt: (pos, data3) => fh3.write(data3, 0, data3.length, pos),
+    truncate: (size) => fh3.truncate(size),
+    close: () => fh3.close(),
+  }, { level: 1 });
+  const data3 = await fs.readFile(outPath3);
+  const parsed3 = parseToc(data3);
+  check(parsed3.fileSize === data3.length, "many-files pack: file_size == actual");
+  check(parsed3.fileCount === 300, `many-files pack: file count ${parsed3.fileCount} == 300`);
+  check(parsed3.files.every((f) => f.size === 0 || (f.off >= parsed3.blobOffset && f.off + f.stored <= parsed3.fileSize)), "many-files pack: all extents inside file");
   console.log(failures ? `${failures} check(s) FAILED` : "all checks passed");
   process.exit(failures ? 1 : 0);
 }
