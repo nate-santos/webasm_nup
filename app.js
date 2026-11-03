@@ -388,7 +388,26 @@ async function addArchiveFile(file) {
 // --- Output adapters ----------------------------------------------------
 class StreamWriter {
   constructor(writable) { this.w = writable; }
-  async writeAt(pos, data) { await this.w.write({ type: "write", position: pos, data }); }
+  async writeAt(pos, data) {
+    // A mid-run write can fail with InvalidModificationError /
+    // NoModificationAllowedError when another program briefly locks the
+    // output file (cloud sync, antivirus). A positional write is
+    // idempotent — writing the same bytes at the same position twice
+    // is harmless — so retry a few times with backoff before giving
+    // up; a persistent failure still surfaces with its name. Other
+    // errors (quota, closed stream) are not retried.
+    let lastErr;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try { await this.w.write({ type: "write", position: pos, data }); return; }
+      catch (e) {
+        lastErr = e;
+        if (e.name !== "InvalidModificationError" && e.name !== "NoModificationAllowedError") throw e;
+        if (attempt === 3) throw e;
+        await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+      }
+    }
+    throw lastErr;
+  }
   async truncate(size) { await this.w.truncate(size); }
   async close() { await this.w.close(); }
 }
