@@ -4,7 +4,9 @@ A static website that converts a game dump folder into a **`.nup`** file —
 entirely locally, in the browser, with WebAssembly. No uploads, no server,
 no keys, no decryption: `.nup` holds unencrypted dumps only.
 
-**Live site:** enable GitHub Pages for this repo (root), or serve it locally:
+**Live site:** https://nate-santos.github.io/webasm_nup/
+
+To serve it locally instead:
 
 ```sh
 python3 -m http.server 8000
