@@ -20,3 +20,14 @@ clang --target=wasm32 -O3 -nostdlib -fno-builtin \
   lzma_wasm.c lzma-sdk/LzmaDec.c lzma-sdk/Lzma2Dec.c lzma-sdk/Bra86.c \
   -o ../lzma.wasm
 ls -lh ../lzma.wasm
+
+# Publishable text asset: keep lzma.js and the compiled module in sync.
+python3 - <<'PYTHON'
+from pathlib import Path
+import base64, re
+p = Path("../lzma.js")
+s = p.read_text()
+s = re.sub(r'const BUNDLED_WASM = "[^"]*";',
+    'const BUNDLED_WASM = "' + base64.b64encode(Path("../lzma.wasm").read_bytes()).decode() + '";', s)
+p.write_text(s)
+PYTHON
