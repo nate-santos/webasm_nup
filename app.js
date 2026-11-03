@@ -379,14 +379,47 @@ $("convertBtn").addEventListener("click", async () => {
   const startTime = performance.now();
   let maxPct = 0;
   try {
+    // --- Pre-flight storage check ---
+    // Worst-case output = total input (raw, no compression gain) + a
+    // small allowance for TOC/meta. If OPFS cannot hold that, do not
+    // start an OPFS run that is doomed to fail halfway: write directly
+    // to a file the user picks instead. That path is not bound by the
+    // origin quota, only by free space on the destination disk, and it
+    // also avoids the extra OPFS copy afterwards.
+    let totalInput = 0;
+    for (const p of v.pkgs) totalInput += countTree(p.root).bytes;
+    let storageMode = "opfs";
+    try {
+      const est = (navigator.storage && navigator.storage.estimate)
+        ? await navigator.storage.estimate() : null;
+      let persisted = false;
+      try {
+        if (navigator.storage && navigator.storage.persist) persisted = await navigator.storage.persist();
+      } catch { /* persist is best-effort; not granting it is not fatal */ }
+      const available = (est && est.quota) ? Math.max(0, est.quota - (est.usage || 0)) : null;
+      if (available !== null && available < totalInput + 1024 * 1024) {
+        storageMode = "savepicker";
+        $("preflightStatus").textContent = `Storage check: ${fmtBytes(available)} available in browser storage, but the input is ${fmtBytes(totalInput)} — writing directly to a file you pick instead of OPFS, so this run is not limited by the browser quota. (This also avoids the extra OPFS copy.)`;
+      } else if (available !== null) {
+        $("preflightStatus").textContent = `Storage check: ${fmtBytes(available)} available in browser storage for ${fmtBytes(totalInput)} of input (worst-case output). Persistent storage: ${persisted ? "granted" : "not granted — keep the tab open; storage could be evicted under disk pressure"}.`;
+      } else {
+        $("preflightStatus").textContent = `Storage check: browser quota unknown, proceeding with OPFS output for ${fmtBytes(totalInput)} of input.`;
+      }
+    } catch {
+      $("preflightStatus").textContent = `Storage check unavailable — proceeding with OPFS output for ${fmtBytes(totalInput)} of input.`;
+    }
     const wasm = await getWasm();
     const outName = `${sanitizeName($("gameName").value)}.nup`;
     let out;
-    try { out = await opfsWriter(outName); }
-    catch (e) {
-      // OPFS unavailable (older Safari, private mode, …): write straight
-      // to a user-picked file instead — still storage, never RAM.
+    if (storageMode === "savepicker") {
       out = await savePickerWriter(outName);
+    } else {
+      try { out = await opfsWriter(outName); }
+      catch (e) {
+        // OPFS unavailable (older Safari, private mode, …): write straight
+        // to a user-picked file instead — still storage, never RAM.
+        out = await savePickerWriter(outName);
+      }
     }
     lastOpfsName = out.kind === "opfs" ? outName : null;
     const pkgs = v.pkgs.map((p) => ({
@@ -451,6 +484,14 @@ $("convertBtn").addEventListener("click", async () => {
     if (e.message === "cancelled") {
       $("convertError").hidden = false;
       $("convertError").textContent = "Conversion cancelled. A partial output file may remain in browser storage; convert again to overwrite it, or delete it from the result section.";
+    } else if (e.name === "AbortError") {
+      // Only reachable from the save picker before conversion starts.
+      $("progressWrap").hidden = true;
+      $("convertError").hidden = false;
+      $("convertError").textContent = "Conversion not started: the save dialog was closed without picking a file.";
+    } else if (e.name === "QuotaExceededError" || /quota/i.test(e.message || "")) {
+      $("convertError").hidden = false;
+      $("convertError").textContent = "Conversion ran out of browser storage mid-run (quota exceeded). A partial output file may remain in browser storage — delete it, free up disk space, and try again. If browser quota is the limit, the pre-flight check should have switched this run to direct-to-file output; if it did not, the quota changed during the run (for example, another tab using storage).";
     } else {
       $("convertError").hidden = false;
       $("convertError").textContent = `Conversion failed: ${e.message}`;

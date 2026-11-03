@@ -69,7 +69,11 @@
     <p class="hint">Output is written to browser storage first (OPFS, file
     <code id="outputNamePreview">game.nup</code>), then you save it where you want.
     Large files (&gt; 256&nbsp;MiB) are stored raw, like Eglantine's writer; smaller
-    files are zstd level 3, falling back to raw when compression doesn't shrink them.</p>
+    files are zstd level 3, falling back to raw when compression doesn't shrink them.
+    Before converting, the site checks browser storage quota and requests
+    persistent storage; if OPFS can't hold the worst-case output, it writes
+    directly to a file you pick instead, rather than failing halfway.</p>
+    <p id="preflightStatus" class="hint"></p>
     <div class="actions">
       <button id="convertBtn" class="primary big" disabled>Convert to .nup</button>
       <button id="cancelBtn" disabled>Cancel</button>

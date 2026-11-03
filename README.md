@@ -44,6 +44,19 @@ dialog (still storage, never a whole-file blob in RAM). A **Check structure**
 button verifies the finished file's magic, TOC SHA-256, package count and
 extent bounds in the browser.
 
+**Pre-flight storage check:** before converting, the site calls
+`navigator.storage.estimate()` and requests persistent storage. It compares
+the available browser storage against the worst-case output (total input
+size, i.e. no compression gain). If OPFS can't hold that, it does not start
+a run doomed to fail halfway — it asks you to pick a destination file and
+writes directly there instead. That path is limited only by free space on
+the destination disk (not the browser origin quota), and it also avoids the
+extra OPFS copy afterwards. A mid-run quota failure, if one still happens
+(for example, another tab eating storage during a run), is reported
+explicitly, and any partial OPFS file can be deleted and the run retried.
+Note this check does not make conversion resumable: an interrupted run
+still restarts from the beginning.
+
 ## The .nup format (v1)
 
 Spec and reference implementation: [a55uka/nup](https://github.com/a55uka/nup)
