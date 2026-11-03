@@ -336,7 +336,10 @@ function renderFolders() {
     }
     const rm = document.createElement("button");
     rm.className = "remove"; rm.textContent = f.kind === "folder" ? "Remove folder" : "Remove archive";
-    rm.addEventListener("click", () => { folders.splice(folders.indexOf(f), 1); refresh(); });
+    rm.addEventListener("click", async () => {
+      folders.splice(folders.indexOf(f), 1); refresh();
+      if (f.dispose) await f.dispose();
+    });
     card.appendChild(rm);
     list.appendChild(card);
   }
@@ -365,16 +368,18 @@ async function addZipFile(file) {
 }
 
 async function addSevenzFile(file) {
+  let z;
   try {
     const lzma = await getLzma();
-    const z = await openSevenz(file, lzma);
+    z = await openSevenz(file, lzma);
     // discover() reads main.npdm/main through the 7z file sources, so
     // an unsupported coder (BCJ2, PPMd, AES…) surfaces here as a
     // failed card instead of failing the whole page.
     const { packages, error } = await discover(z.root);
-    folders.push({ id: ++folderSeq, name: z.name, node: z.root, packages, error, kind: "7z" });
+    folders.push({ id: ++folderSeq, name: z.name, node: z.root, packages, error, kind: "7z", dispose: z.dispose });
     if (!$("gameName").value.trim()) $("gameName").value = z.name.replace(/\.7z$/i, "");
   } catch (e) {
+    if (z) await z.dispose();
     folders.push({ id: ++folderSeq, name: file.name, node: { name: file.name, children: [] }, packages: [], error: e.message, kind: "7z" });
   }
   refresh();
