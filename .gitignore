@@ -6,5 +6,6 @@ wasm-src/zstd*.tgz
 test/tmp-dump/
 test/test-out.nup
 test/test-out-sampling.nup
+test/test-zip*.nup
 # Local serving / editor artefacts
 .DS_Store

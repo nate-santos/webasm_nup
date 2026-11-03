@@ -18,10 +18,31 @@ python3 -m http.server 8000
 
 ## Use it
 
-1. **Add folder(s)** — a dump bundle (`base/` + `updates/` + `dlc/`), a bare
-   content folder (`exefs/` / `romfs/`), or several folders at once.
+1. **Add folder(s) or zip(s)** — a dump bundle (`base/` + `updates/` + `dlc/`), a bare
+   content folder (`exefs/` / `romfs/`), or several folders at once — or a
+   `.zip` containing any of those layouts (including one wrapped in a single
+   top-level folder, which is unwrapped automatically).
    Chrome / Edge use `showDirectoryPicker`; other browsers get a file-picker
-   fallback, and you can also drop a folder onto the drop zone.
+   fallback, and you can also drop a folder or a `.zip` onto the drop zone.
+
+### Zip input
+
+A zip is **not** loaded whole into RAM: only its central directory is read
+up front (entry metadata), and each entry's data is streamed — Stored entries
+as slices, Deflate entries through the platform's native
+`DecompressionStream` — then hashed and zstd-compressed exactly like a folder
+file. Each entry is CRC32-checked against the central directory, so a corrupt
+archive fails naming the entry instead of producing a bad `.nup`.
+
+- **Supported:** Stored (method 0), Deflate (method 8), zip64 (required for
+  archives over 4 GiB, and handled for both the end-of-central-directory
+  record and per-entry 64-bit fields).
+- **Not supported, with a clear error:** encrypted entries, other compression
+  methods (bzip2, LZMA, zstd, PPMd, …), and multi-disk / split archives.
+- **Tip:** if you create the zip yourself, use Stored. A Deflate zip is
+  decompressed and then re-compressed with zstd — wasted work — while a
+  Stored zip converts at about folder speed. The `.nup` output is identical
+  either way (same uncompressed bytes in, same format out).
 2. **Game details** — edit the game name, the version, and add a JPEG icon
    (exactly 256×256, validated in the browser and shown as a preview).
    The name, version and icon land in the base package's metadata.
@@ -35,7 +56,7 @@ game version field above.
 
 ### Output and storage
 
-The result is **not** built in RAM. Input files are read in 256 KiB chunks,
+The result is **not** built in RAM. Input files are read in 1 MiB chunks,
 and the output is written to browser storage first — the Origin Private File
 System (OPFS) — via a streaming writer. After conversion, **Save as…** copies
 the OPFS file to a location you pick, again in chunks. If OPFS is unavailable,

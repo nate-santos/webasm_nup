@@ -3,6 +3,7 @@
 // live here; the .nup writer itself is packer.js, and hashing/zstd are
 // in nup.wasm. Everything runs locally; nothing is uploaded.
 import { loadWasm, packNup, encodeVersion, CHUNK } from "./packer.js";
+import { openZip } from "./zip.js";
 
 const $ = (id) => document.getElementById(id);
 const enc = new TextEncoder();
@@ -230,8 +231,8 @@ function countTree(node) {
 function validate() {
   const errors = [];
   const pkgs = allPackages();
-  if (!folders.length) errors.push("Add at least one input folder.");
-  if (folders.some((f) => f.error)) errors.push("One or more folders failed to scan — remove or replace them.");
+  if (!folders.length) errors.push("Add at least one input folder or zip file.");
+  if (folders.some((f) => f.error)) errors.push("One or more inputs failed to scan — remove or replace them.");
   if (!pkgs.length) errors.push("No packages found.");
   if (pkgs.filter((p) => p.kind === 0).length > 1) errors.push("More than one base package — change the extra ones to Update or Addon, or remove a folder.");
   const name = $("gameName").value.trim();
@@ -271,7 +272,7 @@ function renderFolders() {
     const card = document.createElement("div");
     card.className = "folder-card";
     const h = document.createElement("h3");
-    h.textContent = `📁 ${f.name}`;
+    h.textContent = f.kind === "zip" ? `🗜️ ${f.name}` : `📁 ${f.name}`;
     card.appendChild(h);
     if (f.error) {
       const e = document.createElement("p");
@@ -319,7 +320,7 @@ function renderFolders() {
       card.appendChild(row);
     }
     const rm = document.createElement("button");
-    rm.className = "remove"; rm.textContent = "Remove folder";
+    rm.className = "remove"; rm.textContent = f.kind === "zip" ? "Remove zip" : "Remove folder";
     rm.addEventListener("click", () => { folders.splice(folders.indexOf(f), 1); refresh(); });
     card.appendChild(rm);
     list.appendChild(card);
@@ -328,8 +329,23 @@ function renderFolders() {
 
 async function addFolderNode(node) {
   const { packages, error } = await discover(node);
-  folders.push({ id: ++folderSeq, name: node.name, node, packages, error });
+  folders.push({ id: ++folderSeq, name: node.name, node, packages, error, kind: "folder" });
   if (!$("gameName").value.trim()) $("gameName").value = node.name;
+  refresh();
+}
+
+async function addZipFile(file) {
+  try {
+    const z = await openZip(file);
+    const { packages, error } = await discover(z.root);
+    folders.push({ id: ++folderSeq, name: z.name, node: z.root, packages, error, kind: "zip" });
+    if (!$("gameName").value.trim()) $("gameName").value = z.name.replace(/\.zip$/i, "");
+  } catch (e) {
+    // openZip failed (not a zip, encrypted, unsupported method,
+    // corrupt): keep it as a failed card so the reason stays visible,
+    // the same way a failed folder scan does.
+    folders.push({ id: ++folderSeq, name: file.name, node: { name: file.name, children: [] }, packages: [], error: e.message, kind: "zip" });
+  }
   refresh();
 }
 
@@ -598,6 +614,12 @@ $("addFolderBtn").addEventListener("click", async () => {
   }
 });
 $("addFilesBtn").addEventListener("click", () => $("webkitInput").click());
+$("addZipBtn").addEventListener("click", () => $("zipInput").click());
+$("zipInput").addEventListener("change", async () => {
+  const files = [...$("zipInput").files];
+  $("zipInput").value = "";
+  for (const f of files) await addZipFile(f);
+});
 $("webkitInput").addEventListener("change", async () => {
   const files = [...$("webkitInput").files];
   $("webkitInput").value = "";
@@ -617,6 +639,13 @@ dz.addEventListener("drop", async (e) => {
   for (const item of e.dataTransfer.items) {
     const handle = typeof item.getAsFileSystemHandle === "function" ? await item.getAsFileSystemHandle() : null;
     if (handle && handle.kind === "directory") await addFolderNode(await walkPicker(handle));
+    else if (handle && handle.kind === "file") {
+      const f = await handle.getFile();
+      if (/\.zip$/i.test(f.name)) await addZipFile(f);
+    } else {
+      const f = typeof item.getAsFile === "function" ? item.getAsFile() : null;
+      if (f && /\.zip$/i.test(f.name)) await addZipFile(f);
+    }
   }
 });
 $("gameName").addEventListener("input", refresh);

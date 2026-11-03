@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>webasm_nup — Folder to .nup, in your browser</title>
+<title>webasm_nup — Folder or zip to .nup, in your browser</title>
 <meta name="description" content="Convert a game dump folder into a .nup file with WebAssembly, entirely locally in your browser. No uploads. Output is written to browser storage, not held in RAM.">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 <header class="top">
-  <div class="brand"><span class="logo">⬢</span><div><h1>webasm_nup</h1><p>Folder → .nup, entirely in your browser</p></div></div>
+  <div class="brand"><span class="logo">⬢</span><div><h1>webasm_nup</h1><p>Folder or zip → .nup, entirely in your browser</p></div></div>
   <div class="badges"><span id="wasmStatus" class="badge">WASM: loading…</span><span class="badge">No uploads</span><span class="badge">NUP v1</span></div>
 </header>
 
@@ -18,25 +18,31 @@
     <p>Pack an unencrypted NX game dump into the <strong>.nup</strong> container format
     (spec: <a href="https://github.com/a55uka/nup">a55uka/nup</a>).
     Hashing and zstd compression run in WebAssembly, files are streamed in
-    256&nbsp;KiB chunks, and the result is written to browser storage (OPFS) —
+    1&nbsp;MiB chunks, and the result is written to browser storage (OPFS) —
     so a multi-gigabyte game never has to sit whole in RAM.</p>
     <p class="note">Your files never leave this device. Nothing is uploaded, and no
     keys or decryption are involved: .nup holds unencrypted dumps only.</p>
   </section>
 
   <section class="card" id="foldersCard">
-    <h2>1 · Input folders</h2>
+    <h2>1 · Input folders or zips</h2>
     <p class="hint">Add a dump bundle (<code>base/</code> + <code>updates/</code> + <code>dlc/</code>),
     a bare content folder (<code>exefs/</code> / <code>romfs/</code>), or several folders
-    that together make up a game. Each folder is scanned locally and its
-    packages are listed below.</p>
+    that together make up a game — or a <code>.zip</code> containing any of those
+    layouts. Each input is scanned locally and its packages are listed below.
+    Zips are streamed, not loaded whole: only Stored and Deflate entries are
+    supported, plus zip64; encrypted zips and other methods are rejected with
+    a clear error. If you create the zip yourself, prefer Stored — a Deflate
+    zip is decompressed and then re-compressed with zstd, which is wasted work.</p>
     <div class="actions">
       <button id="addFolderBtn" class="primary">＋ Add folder</button>
       <button id="addFilesBtn">Add folder (file picker fallback)</button>
+      <button id="addZipBtn">＋ Add zip file</button>
       <input type="file" id="webkitInput" webkitdirectory multiple hidden>
+      <input type="file" id="zipInput" accept=".zip" multiple hidden>
       <span id="pickerNote" class="hint"></span>
     </div>
-    <div id="dropZone" class="dropzone">…or drop a folder here</div>
+    <div id="dropZone" class="dropzone">…or drop a folder or .zip file here</div>
     <div id="folderList" class="folder-list"></div>
     <p id="folderSummary" class="summary"></p>
   </section>
