@@ -9,8 +9,14 @@
  * buffer, calls sha_update / zstd_feed, and writes the output buffer to
  * storage (OPFS in the browser). No file ever has to sit whole in RAM:
  * chunks are 256 KiB, and the output buffer is drained after every call.
- * A tiny bump allocator backs zstd's malloc/free; the single CCtx is
- * created once and reset per file, so the heap never grows per file.
+ * A small free-list allocator backs zstd's malloc/free. This matters:
+ * zstd reallocs its workspace whenever the pledged source size changes
+ * (it derives window/parameters from it), so a bump allocator that
+ * never frees leaks one workspace per size change and exhausts the
+ * heap after enough varying-size files — which surfaced as
+ * "zstd_feed failed (-1)" (a memory error) partway through large
+ * conversions. The free list reuses freed blocks, so heap use stays
+ * bounded no matter how many files are packed.
  *
  * zstd sources are the upstream 1.5.7 lib/ (BSD licensed), compiled in
  * from ../wasm-src/zstd-1.5.7/lib — see build.sh. This file itself is
@@ -47,31 +53,124 @@ int memcmp(const void *a, const void *b, size_t n) {
     return 0;
 }
 
-/* bump allocator: 32 MiB, never freed (one long-lived CCtx, reset per file) */
-static unsigned char heap[32u * 1024u * 1024u];
-static size_t heap_off = 0;
+/* Free-list allocator: 48 MiB heap, first-fit with splitting and
+   coalescing. Block layout: 16-byte header (payload size, free-list
+   link, padding) followed by a 16-aligned payload. The free list is
+   kept sorted by address so neighbours can be merged on free. */
+#define HEAP_SIZE (48u * 1024u * 1024u)
+static _Alignas(16) unsigned char heap[HEAP_SIZE];
+static size_t heap_top = 0; /* bump pointer for fresh blocks */
+typedef struct Hdr {
+    size_t size; /* payload bytes */
+    struct Hdr *next; /* free-list link (only valid while free) */
+    size_t pad1, pad2;
+} Hdr;
+static Hdr *free_list = 0;
+#define HDR_SIZE 16u
+#define ALIGN16(n) (((n) + 15u) & ~(size_t)15u)
+static Hdr *hdr_of(void *p) { return (Hdr *)((unsigned char *)p - HDR_SIZE); }
+static void *payload_of(Hdr *h) { return (unsigned char *)h + HDR_SIZE; }
+/* Insert h into the address-sorted free list and merge with any
+   adjacent free neighbours. */
+static void free_insert(Hdr *h) {
+    Hdr **pp = &free_list, *prev = 0;
+    while (*pp && *pp < h) { prev = *pp; pp = &(*pp)->next; }
+    h->next = *pp;
+    *pp = h;
+    /* Merge with successor if it directly follows h. */
+    if (h->next && (unsigned char *)h + HDR_SIZE + h->size == (unsigned char *)h->next) {
+        Hdr *s = h->next;
+        h->size += HDR_SIZE + s->size;
+        h->next = s->next;
+    }
+    /* Merge with predecessor if h directly follows it. */
+    if (prev && (unsigned char *)prev + HDR_SIZE + prev->size == (unsigned char *)h) {
+        prev->size += HDR_SIZE + h->size;
+        prev->next = h->next;
+    }
+}
+static void free_remove(Hdr *h) {
+    Hdr **pp = &free_list;
+    while (*pp && *pp != h) pp = &(*pp)->next;
+    if (*pp) *pp = h->next;
+}
 void *malloc(size_t n) {
-    size_t a = (heap_off + 15u) & ~(size_t)15u;
-    if (a + n > sizeof(heap)) return 0;
-    heap_off = a + n;
-    return heap + a;
+    if (n == 0) n = 1;
+    size_t need = ALIGN16(n);
+    /* First fit in the free list. */
+    for (Hdr *h = free_list; h; h = h->next) {
+        if (h->size >= need) {
+            free_remove(h);
+            if (h->size >= need + HDR_SIZE + 16u) {
+                /* Split off the remainder as a new free block. */
+                Hdr *r = (Hdr *)((unsigned char *)h + HDR_SIZE + need);
+                r->size = h->size - need - HDR_SIZE;
+                h->size = need;
+                free_insert(r);
+            }
+            return payload_of(h);
+        }
+    }
+    /* Fresh block from the top of the heap. */
+    size_t total = HDR_SIZE + need;
+    if (heap_top + total > HEAP_SIZE) return 0;
+    Hdr *h = (Hdr *)(heap + heap_top);
+    heap_top += total;
+    h->size = need;
+    return payload_of(h);
 }
 void *calloc(size_t n, size_t sz) {
+    if (sz && n > (size_t)-1 / sz) return 0; /* overflow */
     size_t t = n * sz;
     void *p = malloc(t);
     if (p) memset(p, 0, t);
     return p;
 }
+void free(void *p) {
+    if (!p) return;
+    /* Ignore pointers that did not come from this heap. */
+    if ((unsigned char *)p < heap + HDR_SIZE || (unsigned char *)p >= heap + HEAP_SIZE) return;
+    free_insert(hdr_of(p));
+}
 void *realloc(void *p, size_t n) {
-    /* zstd only reallocs growing buffers it owns; copy-and-leak is fine here
-       because the CCtx is long-lived and reset, not recreated, per file. */
+    if (!p) return malloc(n);
+    if (n == 0) { free(p); return 0; }
+    Hdr *h = hdr_of(p);
+    size_t old = h->size, need = ALIGN16(n);
+    if (need <= old) {
+        /* Shrink in place, freeing the tail if it makes a whole block. */
+        if (old >= need + HDR_SIZE + 16u) {
+            Hdr *r = (Hdr *)((unsigned char *)h + HDR_SIZE + need);
+            r->size = old - need - HDR_SIZE;
+            h->size = need;
+            free_insert(r);
+        }
+        return p;
+    }
+    /* Try to grow into the physically following block if it is free. */
+    Hdr *next = (Hdr *)((unsigned char *)h + HDR_SIZE + old);
+    int next_free = 0;
+    for (Hdr *f = free_list; f; f = f->next) if (f == next) { next_free = 1; break; }
+    if (next_free && old + HDR_SIZE + next->size >= need) {
+        size_t combined = old + HDR_SIZE + next->size;
+        free_remove(next);
+        if (combined >= need + HDR_SIZE + 16u) {
+            Hdr *r = (Hdr *)((unsigned char *)h + HDR_SIZE + need);
+            r->size = combined - need - HDR_SIZE;
+            h->size = need;
+            free_insert(r);
+        } else {
+            h->size = combined;
+        }
+        return p;
+    }
+    /* Move: copy only the bytes that actually exist. */
     void *q = malloc(n);
-    if (p && q) memcpy(q, p, n); /* over-copy is harmless: old block was >=? no:
-       caller only ever grows, and the old block is at least as large as the
-       data zstd still needs — see zstd's own realloc contract. */
+    if (!q) return 0;
+    memcpy(q, p, old < n ? old : n);
+    free(p);
     return q;
 }
-void free(void *p) { (void)p; }
 
 /* ---- chunk buffers ---- */
 #define IN_SIZE  (256u * 1024u)
