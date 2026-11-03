@@ -430,6 +430,8 @@ $("convertBtn").addEventListener("click", async () => {
   $("progressWrap").hidden = false;
   const startTime = performance.now();
   let maxPct = 0;
+  let out = null; // declared here so a failed run can close its writer
+  let totalInput = 0; // likewise, for failure messages
   try {
     // --- Pre-flight storage check ---
     // Worst-case output = total input (raw, no compression gain) + a
@@ -442,7 +444,7 @@ $("convertBtn").addEventListener("click", async () => {
     // quota looks short, with a warning, because that is what the user
     // asked for.
     const DIRECT_SAVE_THRESHOLD = 2 * 1024 * 1024 * 1024;
-    let totalInput = 0;
+    totalInput = 0;
     for (const p of v.pkgs) totalInput += countTree(p.root).bytes;
     const outputMode = $("outputMode").value || "auto";
     let storageMode = "opfs";
@@ -476,9 +478,14 @@ $("convertBtn").addEventListener("click", async () => {
     } catch {
       $("preflightStatus").textContent = `Storage check unavailable — proceeding with OPFS output for ${fmtBytes(totalInput)} of input.`;
     }
+    if (storageMode === "savepicker") {
+      // The browser cannot check a picked file's drive in advance, and
+      // a mid-run "could not modify the output file" failure is most
+      // often that drive filling up — so state the requirement up front.
+      $("preflightStatus").textContent += ` Make sure the destination drive has at least ${fmtBytes(totalInput)} free — the browser cannot check a picked file's drive in advance.`;
+    }
     const wasm = await getWasm();
     const outName = `${sanitizeName($("gameName").value)}.nup`;
-    let out;
     if (storageMode === "savepicker") {
       try { out = await savePickerWriter(outName); }
       catch (e) {
@@ -568,6 +575,10 @@ $("convertBtn").addEventListener("click", async () => {
     note.textContent = "Verify a finished file with the reference tool: nup verify game.nup (see test/README in the repo).";
     res.appendChild(note);
   } catch (e) {
+    // A failed run leaves its writer open (and, for OPFS, its swap file
+    // uncommitted); close it best-effort so the partial file is
+    // released and a retry starts clean.
+    if (out) { try { await out.writer.close(); } catch { /* writer already broken */ } }
     if (e.message === "cancelled") {
       $("convertError").hidden = false;
       $("convertError").textContent = "Conversion cancelled. A partial output file may remain in browser storage; convert again to overwrite it, or delete it from the result section.";
@@ -579,9 +590,16 @@ $("convertBtn").addEventListener("click", async () => {
     } else if (e.name === "QuotaExceededError" || /quota/i.test(e.message || "")) {
       $("convertError").hidden = false;
       $("convertError").textContent = "Conversion ran out of browser storage mid-run (quota exceeded). A partial output file may remain in browser storage — delete it, free up disk space, and try again. If browser quota is the limit, the pre-flight check should have switched this run to direct-to-file output; if it did not, the quota changed during the run (for example, another tab using storage).";
+    } else if (e.name === "InvalidModificationError" || e.name === "NoModificationAllowedError") {
+      // The browser's file writer refused a mid-run write. This is not
+      // a packer failure: it usually means the destination drive ran
+      // out of space, or the output file was moved, renamed, or opened
+      // by another program while converting.
+      $("convertError").hidden = false;
+      $("convertError").textContent = `Conversion failed: the browser could not modify the output file (${e.name}). This usually means the destination drive ran out of space, or the output file was moved, renamed, or opened by another program mid-run. The output will be nearly as large as the input (${fmtBytes(totalInput)} here, since these files are already compressed and shrink little) — free up space on the destination drive, delete the partial output file, make sure it is not open elsewhere, and try again. If you used direct save, pick a drive with at least ${fmtBytes(totalInput)} free; the browser cannot check that drive's free space in advance.`;
     } else {
       $("convertError").hidden = false;
-      $("convertError").textContent = `Conversion failed: ${e.message}`;
+      $("convertError").textContent = `Conversion failed [${e.name || "Error"}]: ${e.message}`;
     }
   } finally {
     $("convertBtn").disabled = false;
