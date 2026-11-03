@@ -272,6 +272,7 @@ function buildTree(file, entries) {
       for (const part of parts) {
         path = path ? `${path}/${part}` : part;
         let dir = dirMap.get(path);
+        if (!dir && parent.children.some((c) => c.name === part)) throw new Error(`zip: file/directory name clash "${path}"`);
         if (!dir) { dir = { name: part, children: [] }; dirMap.set(path, dir); parent.children.push(dir); }
         parent = dir;
       }
@@ -283,6 +284,7 @@ function buildTree(file, entries) {
     for (let i = 0; i < parts.length - 1; i++) {
       path = path ? `${path}/${parts[i]}` : parts[i];
       let dir = dirMap.get(path);
+      if (!dir && parent.children.some((c) => c.name === parts[i])) throw new Error(`zip: file/directory name clash "${path}"`);
       if (!dir) { dir = { name: parts[i], children: [] }; dirMap.set(path, dir); parent.children.push(dir); }
       parent = dir;
     }
