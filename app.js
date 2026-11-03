@@ -387,7 +387,7 @@ async function addArchiveFile(file) {
 
 // --- Output adapters ----------------------------------------------------
 class StreamWriter {
-  constructor(writable) { this.w = writable; }
+  constructor(writable) { this.w = writable; this.lastPos = null; this.lastLen = null; this.failedPos = null; this.failedLen = null; }
   async writeAt(pos, data) {
     // A mid-run write can fail with InvalidModificationError /
     // NoModificationAllowedError when another program briefly locks the
@@ -395,14 +395,16 @@ class StreamWriter {
     // idempotent — writing the same bytes at the same position twice
     // is harmless — so retry a few times with backoff before giving
     // up; a persistent failure still surfaces with its name. Other
-    // errors (quota, closed stream) are not retried.
+    // errors (quota, closed stream) are not retried. Positions are
+    // recorded for failure diagnostics (see the convert catch block).
+    const len = data ? (data.byteLength ?? data.length ?? 0) : 0;
     let lastErr;
     for (let attempt = 0; attempt < 4; attempt++) {
-      try { await this.w.write({ type: "write", position: pos, data }); return; }
+      try { await this.w.write({ type: "write", position: pos, data }); this.lastPos = pos; this.lastLen = len; return; }
       catch (e) {
         lastErr = e;
-        if (e.name !== "InvalidModificationError" && e.name !== "NoModificationAllowedError") throw e;
-        if (attempt === 3) throw e;
+        if (e.name !== "InvalidModificationError" && e.name !== "NoModificationAllowedError") { this.failedPos = pos; this.failedLen = len; throw e; }
+        if (attempt === 3) { this.failedPos = pos; this.failedLen = len; throw e; }
         await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
       }
     }
@@ -451,6 +453,7 @@ $("convertBtn").addEventListener("click", async () => {
   let maxPct = 0;
   let out = null; // declared here so a failed run can close its writer
   let totalInput = 0; // likewise, for failure messages
+  let lastPr = null; // freshest progress report, for failure diagnostics
   try {
     // --- Pre-flight storage check ---
     // Worst-case output = total input (raw, no compression gain) + a
@@ -540,6 +543,7 @@ $("convertBtn").addEventListener("click", async () => {
       },
       shouldCancel: () => cancelFlag,
       onProgress: (pr) => {
+        lastPr = pr; // unthrottled, so diagnostics see the latest report, not the last rendered one
         const pct = pr.bytesTotal ? Math.min(100, (pr.bytesDone / pr.bytesTotal) * 100) : 0;
         maxPct = Math.max(maxPct, pct);
         // DOM writes are the expensive part at 1 MiB chunks on a 30 GB
@@ -598,6 +602,22 @@ $("convertBtn").addEventListener("click", async () => {
     // uncommitted); close it best-effort so the partial file is
     // released and a retry starts clean.
     if (out) { try { await out.writer.close(); } catch { /* writer already broken */ } }
+    // Diagnostics for the failure report: last progress, writer kind,
+    // and the exact write that failed (if any). A failing write
+    // position below the output cursor means an overwrite (e.g. the
+    // raw fallback rewriting a partial compressed extent); a position
+    // equal to the cursor means an append. The reported file may lag
+    // by one file if the failure was on that file's first chunk.
+    const diagParts = [];
+    if (lastPr) diagParts.push(`last reported file: ${lastPr.currentPath || "(none)"} [phase ${lastPr.phase || ""}, ${lastPr.filesDone}/${lastPr.filesTotal} files, ${fmtBytes(lastPr.bytesDone)} / ${fmtBytes(lastPr.bytesTotal)} input, output cursor ${fmtBytes(lastPr.outputBytes)}]`);
+    if (out) {
+      diagParts.push(`writer: ${out.kind}`);
+      const w = out.writer;
+      if (w.failedPos !== null && w.failedPos !== undefined) diagParts.push(`failing write: position ${w.failedPos} (${fmtBytes(w.failedPos)}), ${w.failedLen} bytes`);
+      else if (w.lastPos !== null && w.lastPos !== undefined) diagParts.push(`last successful write: position ${w.lastPos} (${fmtBytes(w.lastPos)}), ${w.lastLen} bytes`);
+    }
+    const diag = diagParts.length ? `\n\nDiagnostics: ${diagParts.join(" | ")}` : "";
+    $("convertError").style.whiteSpace = "pre-wrap";
     if (e.message === "cancelled") {
       $("convertError").hidden = false;
       $("convertError").textContent = "Conversion cancelled. A partial output file may remain in browser storage; convert again to overwrite it, or delete it from the result section.";
@@ -608,17 +628,17 @@ $("convertBtn").addEventListener("click", async () => {
       $("convertError").textContent = "Conversion not started: the save dialog was closed without picking a file.";
     } else if (e.name === "QuotaExceededError" || /quota/i.test(e.message || "")) {
       $("convertError").hidden = false;
-      $("convertError").textContent = "Conversion ran out of browser storage mid-run (quota exceeded). A partial output file may remain in browser storage — delete it, free up disk space, and try again. If browser quota is the limit, the pre-flight check should have switched this run to direct-to-file output; if it did not, the quota changed during the run (for example, another tab using storage).";
+      $("convertError").textContent = "Conversion ran out of browser storage mid-run (quota exceeded). A partial output file may remain in browser storage — delete it, free up disk space, and try again. If browser quota is the limit, the pre-flight check should have switched this run to direct-to-file output; if it did not, the quota changed during the run (for example, another tab using storage)." + diag;
     } else if (e.name === "InvalidModificationError" || e.name === "NoModificationAllowedError") {
       // The browser's file writer refused a mid-run write. This is not
       // a packer failure: it usually means the destination drive ran
       // out of space, or the output file was moved, renamed, or opened
       // by another program while converting.
       $("convertError").hidden = false;
-      $("convertError").textContent = `Conversion failed: the browser could not modify the output file (${e.name}). This usually means the destination drive ran out of space, or the output file was moved, renamed, or opened by another program mid-run. The output will be nearly as large as the input (${fmtBytes(totalInput)} here, since these files are already compressed and shrink little) — free up space on the destination drive, delete the partial output file, make sure it is not open elsewhere, and try again. If you used direct save, pick a drive with at least ${fmtBytes(totalInput)} free; the browser cannot check that drive's free space in advance.`;
+      $("convertError").textContent = `Conversion failed: the browser could not modify the output file (${e.name}). This usually means the destination drive ran out of space, or the output file was moved, renamed, or opened by another program mid-run. The output will be nearly as large as the input (${fmtBytes(totalInput)} here, since these files are already compressed and shrink little) — free up space on the destination drive, delete the partial output file, make sure it is not open elsewhere, and try again. If you used direct save, pick a drive with at least ${fmtBytes(totalInput)} free; the browser cannot check that drive's free space in advance.` + diag;
     } else {
       $("convertError").hidden = false;
-      $("convertError").textContent = `Conversion failed [${e.name || "Error"}]: ${e.message}`;
+      $("convertError").textContent = `Conversion failed [${e.name || "Error"}]: ${e.message}` + diag;
     }
   } finally {
     $("convertBtn").disabled = false;
