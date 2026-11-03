@@ -50,9 +50,9 @@ A `.7z` file is handled the same way: only its header is read up front
 (the header lives at the end of the archive and is usually itself
 LZMA/LZMA2-compressed, which the site decodes first), and each file's
 data is streamed through the packer. LZMA and LZMA2 decode in a second
-small WebAssembly module, `lzma.wasm` (~17 KB, built from Igor Pavlov's
+small WebAssembly module, `lzma.js` (~17 KB, built from Igor Pavlov's
 LZMA SDK, public domain, including its x86 BCJ filter), which is only
-fetched when the first `.7z` file is added — folder and zip inputs never
+loaded when the first `.7z` file is added — folder and zip inputs never
 load it.
 
 - **Supported folder coders:** Copy, LZMA, LZMA2, Delta (as a filter in
@@ -261,3 +261,10 @@ solid-cache reuse, corruption, dictionary limits, and storage failure cleanup.
 
 The LZMA WASM rebuild also needs `wasm-src/lzma-sdk/Bra.h` (the upstream
 24.09 header, included here). The previous `Bra86.h` placeholder is unused.
+
+The browser now loads the decoder bytes bundled in `lzma.js`, not the
+standalone `lzma.wasm`. This avoids a separate binary-asset publication step.
+`wasm-src/build-lzma.sh` compiles the WASM and updates the base64 constant in
+`lzma.js`; commit that text module with decoder changes. The checked-in
+standalone `lzma.wasm` is a legacy asset and is not used by the browser or tests.
+Explicit `loadLzma(bytes)` remains available for decoder development.
