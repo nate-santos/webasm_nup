@@ -4,18 +4,14 @@
 // in nup.wasm. Everything runs locally; nothing is uploaded.
 import { loadWasm, packNup, encodeVersion, CHUNK } from "./packer.js";
 import { openZip } from "./zip.js";
-import { loadLzma } from "./lzma.js";
 import { openSevenz } from "./sevenz.js";
 
-// lzma.wasm is only fetched when the first .7z file is added — zip and
+// The bundled decoder is only loaded when the first .7z file is added; zip and
 // folder inputs never load it.
 let lzmaPromise = null;
 function getLzma() {
   if (!lzmaPromise) {
-    lzmaPromise = fetch("lzma.wasm").then(async (res) => {
-      if (!res.ok) throw new Error(`could not load lzma.wasm (${res.status})`);
-      return loadLzma(new Uint8Array(await res.arrayBuffer()));
-    });
+    lzmaPromise = import("./lzma.js").then(({ loadLzma }) => loadLzma());
   }
   return lzmaPromise;
 }
@@ -336,7 +332,10 @@ function renderFolders() {
     }
     const rm = document.createElement("button");
     rm.className = "remove"; rm.textContent = f.kind === "folder" ? "Remove folder" : "Remove archive";
-    rm.addEventListener("click", () => { folders.splice(folders.indexOf(f), 1); refresh(); });
+    rm.addEventListener("click", async () => {
+      folders.splice(folders.indexOf(f), 1); refresh();
+      if (f.dispose) await f.dispose();
+    });
     card.appendChild(rm);
     list.appendChild(card);
   }
@@ -365,16 +364,18 @@ async function addZipFile(file) {
 }
 
 async function addSevenzFile(file) {
+  let z;
   try {
     const lzma = await getLzma();
-    const z = await openSevenz(file, lzma);
+    z = await openSevenz(file, lzma);
     // discover() reads main.npdm/main through the 7z file sources, so
     // an unsupported coder (BCJ2, PPMd, AES…) surfaces here as a
     // failed card instead of failing the whole page.
     const { packages, error } = await discover(z.root);
-    folders.push({ id: ++folderSeq, name: z.name, node: z.root, packages, error, kind: "7z" });
+    folders.push({ id: ++folderSeq, name: z.name, node: z.root, packages, error, kind: "7z", dispose: z.dispose });
     if (!$("gameName").value.trim()) $("gameName").value = z.name.replace(/\.7z$/i, "");
   } catch (e) {
+    if (z) await z.dispose();
     folders.push({ id: ++folderSeq, name: file.name, node: { name: file.name, children: [] }, packages: [], error: e.message, kind: "7z" });
   }
   refresh();

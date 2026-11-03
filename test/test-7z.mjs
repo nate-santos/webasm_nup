@@ -40,7 +40,7 @@ async function main() {
   npdm.writeBigUInt64LE(0x0100000000010000n, 0x110);
   const hello = Buffer.from("hello world ".repeat(5000));
   const wasm = await loadWasm(await fs.readFile(join(root, "nup.wasm")));
-  const lzma = await loadLzma(await fs.readFile(join(root, "lzma.wasm")));
+  const lzma = await loadLzma();
   const hashes = {};
   for (const label of ["solid-lzma2", "solid-lzma", "solid-copy", "solid-delta"]) {
     const buf = await fs.readFile(join(root, "test", `${label}.7z`));

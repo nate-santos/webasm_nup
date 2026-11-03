@@ -88,6 +88,10 @@ static const unsigned char *cur_src = NULL;
 static size_t cur_len = 0, cur_pos = 0;
 static size_t last_out = 0, last_consumed = 0;
 static int last_status = 0, last_res = 0;
+/* Cap each SDK call at the coder's declared unpack size. LZMA1 in 7z
+ * often omits an end marker; decoding past that size consumes padding. */
+static uint64_t remaining = UINT64_MAX;
+void lzma_set_output_size(uint64_t size) { remaining = size; }
 
 unsigned int lzma_in_ptr(void) { return (unsigned int)(uintptr_t)in_buf; }
 unsigned int lzma_out_ptr(void) { return (unsigned int)(uintptr_t)out_buf; }
@@ -98,7 +102,7 @@ int lzma_status(void) { return last_status; }
 
 static SRes decode_step(void) {
   SizeT srcLen = cur_len - cur_pos;
-  SizeT destLen = OUT_SIZE;
+  SizeT destLen = remaining < OUT_SIZE ? (SizeT)remaining : OUT_SIZE;
   ELzmaStatus status = LZMA_STATUS_NOT_SPECIFIED;
   SRes res;
   if (is_lzma2) {
@@ -111,11 +115,13 @@ static SRes decode_step(void) {
   cur_pos += srcLen;
   last_consumed = cur_pos;
   last_out = destLen;
+  remaining -= destLen;
   return res;
 }
 
 int lzma_begin(int isLzma2, unsigned int propsLen) {
   is_lzma2 = isLzma2 ? 1 : 0;
+  remaining = UINT64_MAX;
   arena_pos = 0;
   cur_src = NULL; cur_len = 0; cur_pos = 0;
   last_out = 0; last_consumed = 0; last_status = 0; last_res = 0;
@@ -139,13 +145,14 @@ int lzma_begin(int isLzma2, unsigned int propsLen) {
 
 int lzma_feed(unsigned int inLen) {
   if (!begun || inLen > IN_SIZE) return -1;
+  if (!remaining) return 0;
   cur_src = in_buf; cur_len = inLen; cur_pos = 0;
   if (decode_step() != SZ_OK) return -1;
   return (int)last_out;
 }
 
 int lzma_drain(void) {
-  if (!begun || cur_pos >= cur_len) return 0;
+  if (!begun || !remaining || cur_pos >= cur_len) return 0;
   if (decode_step() != SZ_OK) return -1;
   return (int)last_out;
 }
