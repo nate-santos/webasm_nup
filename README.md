@@ -43,6 +43,34 @@ archive fails naming the entry instead of producing a bad `.nup`.
   decompressed and then re-compressed with zstd — wasted work — while a
   Stored zip converts at about folder speed. The `.nup` output is identical
   either way (same uncompressed bytes in, same format out).
+
+### 7z input
+
+A `.7z` file is handled the same way: only its header is read up front
+(the header lives at the end of the archive and is usually itself
+LZMA/LZMA2-compressed, which the site decodes first), and each file's
+data is streamed through the packer. LZMA and LZMA2 decode in a second
+small WebAssembly module, `lzma.wasm` (~17 KB, built from Igor Pavlov's
+LZMA SDK, public domain, including its x86 BCJ filter), which is only
+fetched when the first `.7z` file is added — folder and zip inputs never
+load it.
+
+- **Supported folder coders:** Copy, LZMA, LZMA2, Delta (as a filter in
+  front of LZMA/LZMA2), and x86 BCJ (the chain py7zr uses by default:
+  BCJ + LZMA2). Plain and encoded headers are both supported.
+- **Solid archives** work, with the one cost solid implies: to read a
+  file, its solid block is decoded from the start and earlier files in
+  the block are discarded. Scanning a solid archive therefore decodes
+  the block up to the NPDM (for title-ID detection), and the packer's
+  second pass (when compression is abandoned) decodes the block again.
+  Still streaming, never whole in RAM — just more CPU than a zip.
+- **Not supported, with a clear error:** AES-256 encryption (including
+  encrypted headers), BCJ2, PPMd, BZip2, Deflate-in-7z, non-x86 BCJ
+  variants (ARM, IA-64, PPC, SPARC), multi-output / multi-packed-stream
+  folders, and split archives (`.7z.001`).
+- **Tip:** same as zip — if you create the archive yourself, use Stored
+  (Copy) for speed; a compressed 7z is decompressed and then
+  re-compressed with zstd.
 2. **Game details** — edit the game name, the version, and add a JPEG icon
    (exactly 256×256, validated in the browser and shown as a preview).
    The name, version and icon land in the base package's metadata.

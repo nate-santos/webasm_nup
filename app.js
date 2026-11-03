@@ -4,6 +4,21 @@
 // in nup.wasm. Everything runs locally; nothing is uploaded.
 import { loadWasm, packNup, encodeVersion, CHUNK } from "./packer.js";
 import { openZip } from "./zip.js";
+import { loadLzma } from "./lzma.js";
+import { openSevenz } from "./sevenz.js";
+
+// lzma.wasm is only fetched when the first .7z file is added — zip and
+// folder inputs never load it.
+let lzmaPromise = null;
+function getLzma() {
+  if (!lzmaPromise) {
+    lzmaPromise = fetch("lzma.wasm").then(async (res) => {
+      if (!res.ok) throw new Error(`could not load lzma.wasm (${res.status})`);
+      return loadLzma(new Uint8Array(await res.arrayBuffer()));
+    });
+  }
+  return lzmaPromise;
+}
 
 const $ = (id) => document.getElementById(id);
 const enc = new TextEncoder();
@@ -231,7 +246,7 @@ function countTree(node) {
 function validate() {
   const errors = [];
   const pkgs = allPackages();
-  if (!folders.length) errors.push("Add at least one input folder or zip file.");
+  if (!folders.length) errors.push("Add at least one input folder, zip, or 7z file.");
   if (folders.some((f) => f.error)) errors.push("One or more inputs failed to scan — remove or replace them.");
   if (!pkgs.length) errors.push("No packages found.");
   if (pkgs.filter((p) => p.kind === 0).length > 1) errors.push("More than one base package — change the extra ones to Update or Addon, or remove a folder.");
@@ -272,7 +287,7 @@ function renderFolders() {
     const card = document.createElement("div");
     card.className = "folder-card";
     const h = document.createElement("h3");
-    h.textContent = f.kind === "zip" ? `🗜️ ${f.name}` : `📁 ${f.name}`;
+    h.textContent = f.kind === "folder" ? `📁 ${f.name}` : `🗜️ ${f.name}`;
     card.appendChild(h);
     if (f.error) {
       const e = document.createElement("p");
@@ -320,7 +335,7 @@ function renderFolders() {
       card.appendChild(row);
     }
     const rm = document.createElement("button");
-    rm.className = "remove"; rm.textContent = f.kind === "zip" ? "Remove zip" : "Remove folder";
+    rm.className = "remove"; rm.textContent = f.kind === "folder" ? "Remove folder" : "Remove archive";
     rm.addEventListener("click", () => { folders.splice(folders.indexOf(f), 1); refresh(); });
     card.appendChild(rm);
     list.appendChild(card);
@@ -347,6 +362,27 @@ async function addZipFile(file) {
     folders.push({ id: ++folderSeq, name: file.name, node: { name: file.name, children: [] }, packages: [], error: e.message, kind: "zip" });
   }
   refresh();
+}
+
+async function addSevenzFile(file) {
+  try {
+    const lzma = await getLzma();
+    const z = await openSevenz(file, lzma);
+    // discover() reads main.npdm/main through the 7z file sources, so
+    // an unsupported coder (BCJ2, PPMd, AES…) surfaces here as a
+    // failed card instead of failing the whole page.
+    const { packages, error } = await discover(z.root);
+    folders.push({ id: ++folderSeq, name: z.name, node: z.root, packages, error, kind: "7z" });
+    if (!$("gameName").value.trim()) $("gameName").value = z.name.replace(/\.7z$/i, "");
+  } catch (e) {
+    folders.push({ id: ++folderSeq, name: file.name, node: { name: file.name, children: [] }, packages: [], error: e.message, kind: "7z" });
+  }
+  refresh();
+}
+
+async function addArchiveFile(file) {
+  if (/\.7z$/i.test(file.name)) await addSevenzFile(file);
+  else await addZipFile(file);
 }
 
 // --- Output adapters ----------------------------------------------------
@@ -618,7 +654,7 @@ $("addZipBtn").addEventListener("click", () => $("zipInput").click());
 $("zipInput").addEventListener("change", async () => {
   const files = [...$("zipInput").files];
   $("zipInput").value = "";
-  for (const f of files) await addZipFile(f);
+  for (const f of files) await addArchiveFile(f);
 });
 $("webkitInput").addEventListener("change", async () => {
   const files = [...$("webkitInput").files];
@@ -641,10 +677,10 @@ dz.addEventListener("drop", async (e) => {
     if (handle && handle.kind === "directory") await addFolderNode(await walkPicker(handle));
     else if (handle && handle.kind === "file") {
       const f = await handle.getFile();
-      if (/\.zip$/i.test(f.name)) await addZipFile(f);
+      if (/\.(zip|7z)$/i.test(f.name)) await addArchiveFile(f);
     } else {
       const f = typeof item.getAsFile === "function" ? item.getAsFile() : null;
-      if (f && /\.zip$/i.test(f.name)) await addZipFile(f);
+      if (f && /\.(zip|7z)$/i.test(f.name)) await addArchiveFile(f);
     }
   }
 });

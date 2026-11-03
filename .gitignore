@@ -7,5 +7,6 @@ test/tmp-dump/
 test/test-out.nup
 test/test-out-sampling.nup
 test/test-zip*.nup
+test/test-7z*.nup
 # Local serving / editor artefacts
 .DS_Store

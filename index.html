@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>webasm_nup — Folder or zip to .nup, in your browser</title>
+<title>webasm_nup — Folder, zip, or 7z to .nup, in your browser</title>
 <meta name="description" content="Convert a game dump folder into a .nup file with WebAssembly, entirely locally in your browser. No uploads. Output is written to browser storage, not held in RAM.">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 <header class="top">
-  <div class="brand"><span class="logo">⬢</span><div><h1>webasm_nup</h1><p>Folder or zip → .nup, entirely in your browser</p></div></div>
+  <div class="brand"><span class="logo">⬢</span><div><h1>webasm_nup</h1><p>Folder, zip, or 7z → .nup, entirely in your browser</p></div></div>
   <div class="badges"><span id="wasmStatus" class="badge">WASM: loading…</span><span class="badge">No uploads</span><span class="badge">NUP v1</span></div>
 </header>
 
@@ -25,24 +25,28 @@
   </section>
 
   <section class="card" id="foldersCard">
-    <h2>1 · Input folders or zips</h2>
+    <h2>1 · Input folders, zips, or 7z files</h2>
     <p class="hint">Add a dump bundle (<code>base/</code> + <code>updates/</code> + <code>dlc/</code>),
     a bare content folder (<code>exefs/</code> / <code>romfs/</code>), or several folders
-    that together make up a game — or a <code>.zip</code> containing any of those
-    layouts. Each input is scanned locally and its packages are listed below.
-    Zips are streamed, not loaded whole: only Stored and Deflate entries are
-    supported, plus zip64; encrypted zips and other methods are rejected with
-    a clear error. If you create the zip yourself, prefer Stored — a Deflate
-    zip is decompressed and then re-compressed with zstd, which is wasted work.</p>
+    that together make up a game — or a <code>.zip</code> / <code>.7z</code> containing any of
+    those layouts. Each input is scanned locally and its packages are listed below.
+    Archives are streamed, not loaded whole: zips support Stored and Deflate
+    (plus zip64); 7z supports Copy, LZMA, LZMA2, Delta, and x86 BCJ (the
+    usual 7-Zip/py7zr chains, solid or not). Encrypted archives and other
+    methods (BCJ2, PPMd, BZip2, other BCJ variants, AES) are rejected with a
+    clear error. If you create the archive yourself, prefer Stored — a
+    compressed archive is decompressed and then re-compressed with zstd,
+    which is wasted work. 7z files fetch a small extra decoder
+    (<code>lzma.wasm</code>, ~17 KB) on first use.</p>
     <div class="actions">
       <button id="addFolderBtn" class="primary">＋ Add folder</button>
       <button id="addFilesBtn">Add folder (file picker fallback)</button>
-      <button id="addZipBtn">＋ Add zip file</button>
+      <button id="addZipBtn">＋ Add zip / 7z file</button>
       <input type="file" id="webkitInput" webkitdirectory multiple hidden>
-      <input type="file" id="zipInput" accept=".zip" multiple hidden>
+      <input type="file" id="zipInput" accept=".zip,.7z" multiple hidden>
       <span id="pickerNote" class="hint"></span>
     </div>
-    <div id="dropZone" class="dropzone">…or drop a folder or .zip file here</div>
+    <div id="dropZone" class="dropzone">…or drop a folder, .zip, or .7z file here</div>
     <div id="folderList" class="folder-list"></div>
     <p id="folderSummary" class="summary"></p>
   </section>
