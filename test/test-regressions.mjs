@@ -82,6 +82,13 @@ for i,entries in enumerate([['x','x/y'],['x/y','x'],['x','x/']]):
     for(const f of allFiles(z.root)) assert.deepEqual(Buffer.from(await f.file.readAll()),expected.get(f.name));
     await z.dispose();
   }
+  // Simultaneous requests for distinct folders share one WASM dictionary;
+  // decoding must serialize while all callers still get correct bytes.
+  seven(['a','nonsolid.7z','base','-ms=off']);
+  const concurrent=await openSevenz(fileLike(await fs.readFile(path.join(tmp,'nonsolid.7z'))),lzma);
+  await Promise.all(allFiles(concurrent.root).slice(0,8).map(async(f)=>assert.deepEqual(Buffer.from(await f.file.readAll()),expected.get(f.name))));
+  await concurrent.dispose();
+  console.log('ok concurrent requests for separate non-solid folders');
   console.log('ok 30 default 7-Zip archives, all payload bytes verified');
   if(baseline) {assert.ok(baselineFailures>0,'corpus must reproduce old header rejection');console.log(`old code rejected ${baselineFailures}/30 of these same archives`);}
   // Large dictionary properties are tested without allocating that dictionary.
