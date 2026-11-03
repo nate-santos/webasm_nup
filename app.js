@@ -6,7 +6,7 @@ import { loadWasm, packNup, encodeVersion, CHUNK } from "./packer.js";
 import { openZip } from "./zip.js";
 import { openSevenz } from "./sevenz.js";
 
-// lzma.wasm is only fetched when the first .7z file is added — zip and
+// The bundled decoder is only loaded when the first .7z file is added; zip and
 // folder inputs never load it.
 let lzmaPromise = null;
 function getLzma() {
