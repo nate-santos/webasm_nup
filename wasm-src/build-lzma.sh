@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 clang --target=wasm32 -O3 -nostdlib -fno-builtin \
   -DNDEBUG \
   -Ilzma-sdk -Ishim \
-  -Wl,--no-entry -Wl,--export-memory \
+  -Wl,--strip-all -Wl,--no-entry -Wl,--export-memory \
   -Wl,--export=lzma_in_ptr -Wl,--export=lzma_out_ptr \
   -Wl,--export=lzma_in_size -Wl,--export=lzma_out_size \
   -Wl,--export=lzma_in_consumed -Wl,--export=lzma_status \
