@@ -22,7 +22,7 @@
 //     larger chunks for it, so the wasm call count is unchanged — the
 //     saving is in JS slice/arrayBuffer/OPFS-write calls per byte.)
 //   * Sampling: for files over 4 MiB, the first 1 MiB is compressed
-//     as a sample. If it shrinks by less than 10%, compression is
+//     as a sample. If it shrinks by less than 7%, compression is
 //     abandoned immediately and the file is written raw in one pass,
 //     instead of paying for a full compress pass and then a raw repass.
 //     This is a heuristic — a file whose head is incompressible but
@@ -69,7 +69,7 @@ export const CHUNK = 1024 * 1024;
 export const RAW_THRESHOLD = 256 * 1024 * 1024;
 const SAMPLE_BYTES = 1024 * 1024;      // incompressibility sample size
 const SAMPLE_MIN_SIZE = 4 * 1024 * 1024; // only sample files larger than this
-const SAMPLE_MAX_RATIO = 0.90;         // sample must shrink by >10% to keep compressing
+const SAMPLE_MAX_RATIO = 0.93;         // sample must shrink by >7% to keep compressing
 const ALIGN = 16;
 const FILE_TAG = 0x80000000;
 const NO_DIR = 0xffffffff;
@@ -553,4 +553,4 @@ export async function packNup(wasm, packages, output, options = {}) {
   await output.truncate(fileSize);
   await output.close();
   return { fileSize, blobOffset, tocSize, packageCount: packages.length, dirCount, fileCount, totalBytes, uuid: hex(uuid) };
-      }
+}
