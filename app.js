@@ -4,7 +4,6 @@
 // in nup.wasm. Everything runs locally; nothing is uploaded.
 import { loadWasm, packNup, encodeVersion, CHUNK } from "./packer.js";
 import { openZip } from "./zip.js";
-import { loadLzma } from "./lzma.js";
 import { openSevenz } from "./sevenz.js";
 
 // lzma.wasm is only fetched when the first .7z file is added — zip and
@@ -12,10 +11,7 @@ import { openSevenz } from "./sevenz.js";
 let lzmaPromise = null;
 function getLzma() {
   if (!lzmaPromise) {
-    lzmaPromise = fetch("lzma.wasm").then(async (res) => {
-      if (!res.ok) throw new Error(`could not load lzma.wasm (${res.status})`);
-      return loadLzma(new Uint8Array(await res.arrayBuffer()));
-    });
+    lzmaPromise = import("./lzma.js").then(({ loadLzma }) => loadLzma());
   }
   return lzmaPromise;
 }
