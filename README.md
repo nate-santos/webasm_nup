@@ -58,12 +58,19 @@ load it.
 - **Supported folder coders:** Copy, LZMA, LZMA2, Delta (as a filter in
   front of LZMA/LZMA2), and x86 BCJ (the chain py7zr uses by default:
   BCJ + LZMA2). Plain and encoded headers are both supported.
-- **Solid archives** work, with the one cost solid implies: to read a
-  file, its solid block is decoded from the start and earlier files in
-  the block are discarded. Scanning a solid archive therefore decodes
-  the block up to the NPDM (for title-ID detection), and the packer's
-  second pass (when compression is abandoned) decodes the block again.
-  Still streaming, never whole in RAM — just more CPU than a zip.
+- **Solid archives** are decoded once per solid block. Subsequent file
+  reads and compression repasses use a temporary decoded cache, avoiding
+  repeated decompression of earlier files. The cache uses OPFS when
+  available and is deleted when you remove the archive. It needs free
+  browser storage equal to the decoded blocks you read, in addition to
+  output storage. Without OPFS, the decoded cache is limited to 64 MiB
+  per archive; larger inputs fail with instructions to extract first.
+- **Dictionary limit:** LZMA/LZMA2 dictionaries up to 128 MiB are supported
+  by the fixed-memory decoder. Larger dictionaries are rejected before
+  allocation with their required size and instructions to repack or extract.
+- **Integrity:** the decoder stops at each coder's declared unpack size
+  (LZMA1 headers can omit an end marker). Decoded header/folder CRCs and
+  per-file CRCs are checked when supplied by the archive.
 - **Not supported, with a clear error:** AES-256 encryption (including
   encrypted headers), BCJ2, PPMd, BZip2, Deflate-in-7z, non-x86 BCJ
   variants (ARM, IA-64, PPC, SPARC), multi-output / multi-packed-stream
@@ -243,3 +250,14 @@ deep, and `nup extract` reproduces the original base tree byte-for-byte.
 - Compression: [zstd](https://github.com/facebook/zstd) by Meta, BSD licensed.
 - This site's own code (HTML/CSS/JS, `packer.js`, `wasm-src/nup_wasm.c`) is
   MIT licensed — see `LICENSE` if present, otherwise treat it as MIT.
+
+### Archive/tree regression tests
+
+Run `node test/test-regressions.mjs` in addition to the three existing test
+scripts. This needs the `7z` command and Python 3 to generate deterministic
+archives; generated fixtures live in an OS temporary directory and are deleted.
+The suite covers encoded headers, mixed-case content pointers, duplicate names,
+solid-cache reuse, corruption, dictionary limits, and storage failure cleanup.
+
+The LZMA WASM rebuild also needs `wasm-src/lzma-sdk/Bra.h` (the upstream
+24.09 header, included here). The previous `Bra86.h` placeholder is unused.
