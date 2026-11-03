@@ -188,12 +188,21 @@ function buildTree(packages) {
   const dirs = [];   // {nameBytes, firstChild, childCount}
   const files = [];  // {nameBytes, file, path}
   const children = [];
-  const dirIdOf = new Map(); // DirNode object -> dir id
-  function rec(node, path) {
+  function rec(node, path, contentRoot = false) {
     const id = dirs.length;
-    dirIdOf.set(node, id);
     dirs.push({ nameBytes: utf8Bytes(node.name), firstChild: 0, childCount: 0 });
-    const sorted = [...node.children].sort((a, b) => cmpBytes(utf8Bytes(a.name), utf8Bytes(b.name)));
+    // Canonicalize only package content-directory labels, not filenames or
+    // nested directories. Do not mutate the caller's source tree.
+    const sorted = node.children.map((child) => {
+      const lower = child.name.toLowerCase();
+      return contentRoot && child.children && (lower === "exefs" || lower === "romfs")
+        ? { ...child, name: lower } : child;
+    }).sort((a, b) => cmpBytes(utf8Bytes(a.name), utf8Bytes(b.name)));
+    for (let i = 1; i < sorted.length; i++) {
+      if (cmpBytes(utf8Bytes(sorted[i - 1].name), utf8Bytes(sorted[i].name)) === 0) {
+        throw new Error(`pack: duplicate child name "${sorted[i].name}" in "${path || "/"}"`);
+      }
+    }
     const slotBase = children.length;
     for (let i = 0; i < sorted.length; i++) children.push(0);
     sorted.forEach((child, i) => {
@@ -213,13 +222,13 @@ function buildTree(packages) {
     return id;
   }
   for (const pkg of packages) {
-    pkg._root = rec(pkg.root, "");
+    pkg._root = rec(pkg.root, "", true);
     pkg._exefs = NO_DIR; pkg._romfs = NO_DIR;
-    for (const child of pkg.root.children) {
-      if (!child.children) continue;
-      const id = dirIdOf.get(child);
-      if (child.name === "exefs") pkg._exefs = id;
-      if (child.name === "romfs") pkg._romfs = id;
+    const root = dirs[pkg._root];
+    for (const id of children.slice(root.firstChild, root.firstChild + root.childCount)) {
+      if (id >= FILE_TAG) continue;
+      if (cmpBytes(dirs[id].nameBytes, utf8Bytes("exefs")) === 0) pkg._exefs = id;
+      if (cmpBytes(dirs[id].nameBytes, utf8Bytes("romfs")) === 0) pkg._romfs = id;
     }
   }
   return { dirs, files, children };
@@ -544,4 +553,4 @@ export async function packNup(wasm, packages, output, options = {}) {
   await output.truncate(fileSize);
   await output.close();
   return { fileSize, blobOffset, tocSize, packageCount: packages.length, dirCount, fileCount, totalBytes, uuid: hex(uuid) };
-}
+      }
