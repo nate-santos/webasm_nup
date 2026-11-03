@@ -41,6 +41,7 @@ button.big{font-size:17px;padding:12px 22px}
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .form-grid label{display:flex;flex-direction:column;gap:6px;font-weight:600}
 .form-grid input[type=text]{background:#12151c;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:10px;font-size:15px}
+.form-grid select{background:#12151c;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:10px;font-size:15px}
 .optional{font-weight:400;color:var(--muted)}
 .icon-preview{display:flex;gap:12px;align-items:center;margin-top:12px}
 .icon-preview img{width:64px;height:64px;border-radius:10px;border:1px solid var(--line);image-rendering:pixelated}

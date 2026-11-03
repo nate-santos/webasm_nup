@@ -44,6 +44,22 @@ dialog (still storage, never a whole-file blob in RAM). A **Check structure**
 button verifies the finished file's magic, TOC SHA-256, package count and
 extent bounds in the browser.
 
+**Speed (for 20–30 GB inputs):** input is read in 1 MiB chunks (the
+WASM input buffer is 256 KiB; the JS wrapper splits larger chunks for
+it), progress rendering is throttled to ~10 updates/s, and compression
+is zstd level 1 by default ("Fast") with level 3 ("Smaller") as an
+option — level is per-file-frame, so both verify identically. For files
+over 4 MiB, the first 1 MiB is compressed as a sample: if it shrinks by
+less than 10%, the file is written raw in one pass instead of paying
+for a full compress pass and then a raw repass. The sample is a
+heuristic (a file whose head is incompressible but whose body compresses
+will end up raw); raw is always valid, and the old stored≥size backstop
+still catches files that pass the sample and then stop compressing.
+Output "Auto" writes directly to a file you pick when the input is over
+2 GiB, skipping the OPFS copy at the end. Still single-threaded and
+single-pass-per-file: parallel workers and a faster wasm SHA are the
+remaining big wins, not yet implemented.
+
 **Pre-flight storage check:** before converting, the site calls
 `navigator.storage.estimate()` and requests persistent storage. It compares
 the available browser storage against the worst-case output (total input

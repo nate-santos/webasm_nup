@@ -67,12 +67,29 @@
   <section class="card" id="convertCard">
     <h2>3 · Convert</h2>
     <p class="hint">Output is written to browser storage first (OPFS, file
-    <code id="outputNamePreview">game.nup</code>), then you save it where you want.
+    <code id="outputNamePreview">game.nup</code>), then you save it where you want —
+    unless you pick direct save, or the input is over 2&nbsp;GiB (auto mode),
+    in which case it writes straight to a file you pick and skips the OPFS copy.
     Large files (&gt; 256&nbsp;MiB) are stored raw, like Eglantine's writer; smaller
-    files are zstd level 3, falling back to raw when compression doesn't shrink them.
-    Before converting, the site checks browser storage quota and requests
-    persistent storage; if OPFS can't hold the worst-case output, it writes
-    directly to a file you pick instead, rather than failing halfway.</p>
+    files are zstd at the level chosen below, falling back to raw when compression
+    doesn't shrink them. Before converting, the site checks browser storage quota
+    and requests persistent storage; if OPFS can't hold the worst-case output, it
+    writes directly to a file you pick instead, rather than failing halfway.</p>
+    <div class="form-grid">
+      <label>Compression
+        <select id="compressLevel">
+          <option value="1" selected>Fast — zstd level 1 (faster, slightly larger)</option>
+          <option value="3">Smaller — zstd level 3 (slower, smaller)</option>
+        </select>
+      </label>
+      <label>Output
+        <select id="outputMode">
+          <option value="auto" selected>Auto — direct save over 2 GiB input, OPFS otherwise</option>
+          <option value="opfs">Browser storage (OPFS), then Save as…</option>
+          <option value="direct">Direct — pick a file first, skip OPFS</option>
+        </select>
+      </label>
+    </div>
     <p id="preflightStatus" class="hint"></p>
     <div class="actions">
       <button id="convertBtn" class="primary big" disabled>Convert to .nup</button>
@@ -97,7 +114,7 @@
     <h2>How it works</h2>
     <ul>
       <li><strong>WASM core:</strong> <code>nup.wasm</code> (C + upstream zstd 1.5.7, built in <code>wasm-src/</code>) does streaming SHA-256 and streaming zstd. JS only orchestrates files and writes the superblock / TOC / meta TLVs.</li>
-      <li><strong>Storage, not RAM:</strong> input is read in 256&nbsp;KiB chunks and output goes to OPFS. The only whole-file reads are the tiny <code>main.npdm</code> / <code>main</code> header used to find the title ID and build ID.</li>
+      <li><strong>Storage, not RAM:</strong> input is read in 1&nbsp;MiB chunks and output goes to OPFS (or straight to a picked file on large runs). The only whole-file reads are the tiny <code>main.npdm</code> / <code>main</code> header used to find the title ID and build ID.</li>
       <li><strong>Compatible layout:</strong> superblock, TOC, 16-byte-aligned extents, dedup by (size, SHA-256), <code>.listing</code> files excluded, update-only dumps flagged <code>standalone_update</code> — verified against the reference Python <code>nup verify</code> tool in <code>test/</code>.</li>
       <li><strong>Browser support:</strong> folder picking works best in Chrome / Edge (<code>showDirectoryPicker</code>). Other browsers can use the file-picker fallback. OPFS is required for the storage-backed output; if it is unavailable, the site falls back to writing straight to a file you pick with the save dialog.</li>
     </ul>

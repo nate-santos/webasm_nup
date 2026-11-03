@@ -17,7 +17,18 @@
 //     reserved u16, size u32, payload; sorted by type, no padding).
 //
 // Streaming / storage model:
-//   * Input files are read in 256 KiB chunks, never whole in RAM.
+//   * Input files are read in 1 MiB chunks, never whole in RAM. (The
+//     WASM input buffer is 256 KiB; the wrapper in loadWasm splits
+//     larger chunks for it, so the wasm call count is unchanged — the
+//     saving is in JS slice/arrayBuffer/OPFS-write calls per byte.)
+//   * Sampling: for files over 4 MiB, the first 1 MiB is compressed
+//     as a sample. If it shrinks by less than 10%, compression is
+//     abandoned immediately and the file is written raw in one pass,
+//     instead of paying for a full compress pass and then a raw repass.
+//     This is a heuristic — a file whose head is incompressible but
+//     whose body compresses will end up raw — but raw is always valid,
+//     and the old stored>=size backstop still catches files that pass
+//     the sample and then stop compressing.
 //   * Output goes through an adapter with writeAt(position, bytes) /
 //     truncate(size) / close() — in the browser that adapter is an OPFS
 //     FileSystemWritableFileStream, i.e. disk, not RAM.
@@ -54,8 +65,11 @@
 // to the base package, or to the first package when there is no base,
 // exactly like the reference packer and Eglantine's writer.
 
-export const CHUNK = 256 * 1024;
+export const CHUNK = 1024 * 1024;
 export const RAW_THRESHOLD = 256 * 1024 * 1024;
+const SAMPLE_BYTES = 1024 * 1024;      // incompressibility sample size
+const SAMPLE_MIN_SIZE = 4 * 1024 * 1024; // only sample files larger than this
+const SAMPLE_MAX_RATIO = 0.90;         // sample must shrink by >10% to keep compressing
 const ALIGN = 16;
 const FILE_TAG = 0x80000000;
 const NO_DIR = 0xffffffff;
@@ -326,6 +340,8 @@ export async function packNup(wasm, packages, output, options = {}) {
       wasm.zstdBegin(size, level);
       wasm.shaInit();
       let stored = 0, aborted = false, outPos = start;
+      let sampleBytes = 0, sampleStored = 0, sampleDecided = false;
+      const useSampling = size > SAMPLE_MIN_SIZE;
       for await (const chunk of f.file.chunks()) {
         checkCancel();
         wasm.shaUpdate(chunk);
@@ -333,6 +349,17 @@ export async function packNup(wasm, packages, output, options = {}) {
         if (out.length) { await output.writeAt(outPos, out); outPos += out.length; stored += out.length; }
         bytesDone += chunk.length;
         progress("compressing", f.path);
+        if (useSampling && !sampleDecided) {
+          sampleBytes += chunk.length;
+          sampleStored += out.length;
+          if (sampleBytes >= SAMPLE_BYTES) {
+            sampleDecided = true;
+            // Note: zstd may buffer the first block, so a 0-output first
+            // chunk keeps compression; the stored>=size backstop below
+            // still catches a fully incompressible file in that case.
+            if (sampleStored > sampleBytes * SAMPLE_MAX_RATIO) { aborted = true; break; }
+          }
+        }
         if (stored >= size) { aborted = true; break; }
       }
       if (!aborted) {

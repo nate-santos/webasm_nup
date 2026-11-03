@@ -381,13 +381,18 @@ $("convertBtn").addEventListener("click", async () => {
   try {
     // --- Pre-flight storage check ---
     // Worst-case output = total input (raw, no compression gain) + a
-    // small allowance for TOC/meta. If OPFS cannot hold that, do not
-    // start an OPFS run that is doomed to fail halfway: write directly
-    // to a file the user picks instead. That path is not bound by the
-    // origin quota, only by free space on the destination disk, and it
-    // also avoids the extra OPFS copy afterwards.
+    // small allowance for TOC/meta. Output mode "auto" (the default)
+    // writes directly to a file the user picks when the input is over
+    // 2 GiB, skipping the OPFS copy at the end; it also switches to
+    // direct save when OPFS quota cannot hold the worst case. A direct
+    // save is not bound by the origin quota, only by free space on the
+    // destination disk. An explicit "OPFS" choice is honoured even when
+    // quota looks short, with a warning, because that is what the user
+    // asked for.
+    const DIRECT_SAVE_THRESHOLD = 2 * 1024 * 1024 * 1024;
     let totalInput = 0;
     for (const p of v.pkgs) totalInput += countTree(p.root).bytes;
+    const outputMode = $("outputMode").value || "auto";
     let storageMode = "opfs";
     try {
       const est = (navigator.storage && navigator.storage.estimate)
@@ -397,11 +402,22 @@ $("convertBtn").addEventListener("click", async () => {
         if (navigator.storage && navigator.storage.persist) persisted = await navigator.storage.persist();
       } catch { /* persist is best-effort; not granting it is not fatal */ }
       const available = (est && est.quota) ? Math.max(0, est.quota - (est.usage || 0)) : null;
-      if (available !== null && available < totalInput + 1024 * 1024) {
+      const quotaShort = available !== null && available < totalInput + 1024 * 1024;
+      const persistNote = `Persistent storage: ${persisted ? "granted" : "not granted — keep the tab open; storage could be evicted under disk pressure"}.`;
+      if (outputMode === "direct") {
+        storageMode = "savepicker";
+        $("preflightStatus").textContent = `Direct save chosen: ${fmtBytes(totalInput)} of input will be written straight to the file you pick, skipping the OPFS copy.`;
+      } else if (quotaShort && outputMode === "opfs") {
+        storageMode = "opfs";
+        $("preflightStatus").textContent = `Warning: OPFS chosen explicitly, but only ${fmtBytes(available)} is available in browser storage for ${fmtBytes(totalInput)} of input — this run may fail on quota. ${persistNote}`;
+      } else if (quotaShort) {
         storageMode = "savepicker";
         $("preflightStatus").textContent = `Storage check: ${fmtBytes(available)} available in browser storage, but the input is ${fmtBytes(totalInput)} — writing directly to a file you pick instead of OPFS, so this run is not limited by the browser quota. (This also avoids the extra OPFS copy.)`;
+      } else if (outputMode === "auto" && totalInput > DIRECT_SAVE_THRESHOLD) {
+        storageMode = "savepicker";
+        $("preflightStatus").textContent = `Large input (${fmtBytes(totalInput)}): writing directly to a file you pick to skip the OPFS copy at the end. ${persistNote}`;
       } else if (available !== null) {
-        $("preflightStatus").textContent = `Storage check: ${fmtBytes(available)} available in browser storage for ${fmtBytes(totalInput)} of input (worst-case output). Persistent storage: ${persisted ? "granted" : "not granted — keep the tab open; storage could be evicted under disk pressure"}.`;
+        $("preflightStatus").textContent = `Storage check: ${fmtBytes(available)} available in browser storage for ${fmtBytes(totalInput)} of input (worst-case output). ${persistNote}`;
       } else {
         $("preflightStatus").textContent = `Storage check: browser quota unknown, proceeding with OPFS output for ${fmtBytes(totalInput)} of input.`;
       }
@@ -412,7 +428,14 @@ $("convertBtn").addEventListener("click", async () => {
     const outName = `${sanitizeName($("gameName").value)}.nup`;
     let out;
     if (storageMode === "savepicker") {
-      out = await savePickerWriter(outName);
+      try { out = await savePickerWriter(outName); }
+      catch (e) {
+        if (e.name === "AbortError") throw e;
+        // Save dialog unavailable (browser without File System Access):
+        // fall back to OPFS rather than failing the whole conversion.
+        out = await opfsWriter(outName);
+        $("preflightStatus").textContent += " (Save dialog unavailable, fell back to OPFS.)";
+      }
     } else {
       try { out = await opfsWriter(outName); }
       catch (e) {
@@ -427,8 +450,10 @@ $("convertBtn").addEventListener("click", async () => {
       titleId: BigInt(p.titleId || 0),
       version: p.kind === 0 ? encodeVersion($("gameVersion").value.trim()) : p.version,
     }));
+    const level = Number($("compressLevel").value || 1);
+    let lastDomUpdate = 0;
     const result = await packNup(wasm, pkgs, out.writer, {
-      level: 3,
+      level,
       appMeta: {
         titleName: $("gameName").value.trim(),
         displayVersion: $("gameVersion").value.trim(),
@@ -439,21 +464,31 @@ $("convertBtn").addEventListener("click", async () => {
       onProgress: (pr) => {
         const pct = pr.bytesTotal ? Math.min(100, (pr.bytesDone / pr.bytesTotal) * 100) : 0;
         maxPct = Math.max(maxPct, pct);
+        // DOM writes are the expensive part at 1 MiB chunks on a 30 GB
+        // run (~30,000 calls): throttle them to ~10/s, always showing
+        // the final 100%. The packer still reports every chunk; only
+        // the rendering is throttled.
+        const now = performance.now();
+        if (now - lastDomUpdate < 100 && maxPct < 100) return;
+        lastDomUpdate = now;
         $("progressFill").style.width = `${maxPct}%`;
         $("progressPct").textContent = `${maxPct.toFixed(1)}%`;
         $("progressFiles").textContent = `${pr.filesDone}/${pr.filesTotal} files`;
         $("progressBytes").textContent = `${fmtBytes(pr.bytesDone)} / ${fmtBytes(pr.bytesTotal)}`;
-        $("progressTime").textContent = fmtTime(performance.now() - startTime);
+        $("progressTime").textContent = fmtTime(now - startTime);
         $("progressPhase").textContent = pr.phase || "";
         $("progressPath").textContent = pr.currentPath || "";
       },
     });
+    $("progressFill").style.width = "100%";
+    $("progressPct").textContent = "100%";
     const res = $("result");
     res.hidden = false;
     res.innerHTML = "";
     const h = document.createElement("h3"); h.textContent = "✅ Conversion complete"; res.appendChild(h);
     const lines = [
       `Output: ${outName} (${fmtBytes(result.fileSize)}) — ${result.packageCount} package(s), ${result.dirCount} dirs, ${result.fileCount} files.`,
+      `Compression: zstd level ${level} for files up to 256 MiB (larger files are stored raw; files that don't shrink are stored raw).`,
       `UUID: ${result.uuid}`,
       out.kind === "opfs"
         ? "Stored in browser storage (OPFS). Use Save as… to copy it to your computer — the copy streams in chunks, it is not loaded into RAM."
