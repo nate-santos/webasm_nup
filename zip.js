@@ -67,11 +67,12 @@ const CRC_TABLE = (() => {
   }
   return t;
 })();
-function crc32Update(crc, bytes) {
+export function crc32Update(crc, bytes) {
   let c = crc;
   for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
   return c >>> 0;
 }
+export function crc32Final(crc) { return (crc ^ 0xffffffff) >>> 0; }
 
 // --- Central directory --------------------------------------------------
 async function findEocd(file) {
