@@ -534,7 +534,7 @@ $("convertBtn").addEventListener("click", async () => {
       titleId: BigInt(p.titleId || 0),
       version: p.kind === 0 ? encodeVersion($("gameVersion").value.trim()) : p.version,
     }));
-    const level = Number($("compressLevel").value || 1);
+    const level = Number($("compressLevel").value || 3);
     let lastDomUpdate = 0;
     const result = await packNup(wasm, pkgs, out.writer, {
       level,
