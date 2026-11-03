@@ -50,7 +50,8 @@ A `.7z` file is handled the same way: only its header is read up front
 (the header lives at the end of the archive and is usually itself
 LZMA/LZMA2-compressed, which the site decodes first), and each file's
 data is streamed through the packer. LZMA and LZMA2 decode in a second
-small WebAssembly module, `lzma.js` (~17 KB, built from Igor Pavlov's
+small WebAssembly module (about 17 KiB of WASM, bundled as base64 in
+`lzma.js`, built from Igor Pavlov's
 LZMA SDK, public domain, including its x86 BCJ filter), which is only
 loaded when the first `.7z` file is added — folder and zip inputs never
 load it.
