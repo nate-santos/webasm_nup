@@ -92,7 +92,14 @@ function cmpBytes(a, b) {
   for (let i = 0; i < n; i++) if (a[i] !== b[i]) return a[i] - b[i];
   return a.length - b.length;
 }
-function align16(n) { return (n + ALIGN - 1) & ~(ALIGN - 1); }
+// Align up to a multiple of 16. Must use double arithmetic, NOT the
+// usual (n + 15) & ~15: JS bitwise ops convert to signed 32-bit, so
+// any offset at or past 2 GiB wrapped negative (2,151,559,888 became
+// -2,143,407,408), and the browser rejected the negative write
+// position with InvalidModificationError. This broke every conversion
+// whose output passed 2 GiB. Math.ceil on a double is exact here
+// (offsets are integers well below 2^53).
+export function align16(n) { return Math.ceil(n / ALIGN) * ALIGN; }
 function hex(bytes) { return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join(""); }
 function concat(arrays) {
   const total = arrays.reduce((a, b) => a + b.length, 0);

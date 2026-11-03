@@ -522,7 +522,10 @@ $("convertBtn").addEventListener("click", async () => {
       catch (e) {
         // OPFS unavailable (older Safari, private mode, …): write straight
         // to a user-picked file instead — still storage, never RAM.
+        // Say so, so a later failure report is not misread as an OPFS
+        // failure when the run actually used direct save.
         out = await savePickerWriter(outName);
+        $("preflightStatus").textContent += " (OPFS unavailable, fell back to direct save.)";
       }
     }
     lastOpfsName = out.kind === "opfs" ? outName : null;

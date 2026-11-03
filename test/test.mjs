@@ -15,7 +15,7 @@ import { promises as fs } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadWasm, packNup, CHUNK } from "../packer.js";
+import { loadWasm, packNup, CHUNK, align16 } from "../packer.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const tmp = join(root, "test", "tmp-dump");
@@ -167,6 +167,19 @@ function parseToc(data) {
   return { tocSize, blobOffset, fileSize, toc, pkgCount, dirCount, fileCount, pkgs, dirs, files, poolName, fileNames, sortedOk };
 }
 async function main() {
+  // align16 must never wrap at 2 GiB: the old bitwise form
+  // (n + 15) & ~15 turned an extent start of 2,151,559,888 into
+  // -2,143,407,408, and the browser rejected the negative write
+  // position with InvalidModificationError on every conversion whose
+  // output passed 2 GiB.
+  check(align16(0) === 0, "align16(0) == 0");
+  check(align16(1) === 16, "align16(1) == 16");
+  check(align16(16) === 16, "align16(16) == 16");
+  check(align16(17) === 32, "align16(17) == 32");
+  check(align16(2147483647) === 2147483648, "align16(2^31-1) == 2^31");
+  check(align16(2147483648) === 2147483648, "align16(2^31) == 2^31");
+  check(align16(2151559873) === 2151559888, "align16 past 2 GiB (regression value)");
+  check(align16(4294967296) === 4294967296, "align16(2^32) == 2^32");
   const { npdm } = await buildDump();
   const baseRoot = await scanDir(join(tmp, "base"), "");
   const updRoot = await scanDir(join(tmp, "updates", "458752"), "");
