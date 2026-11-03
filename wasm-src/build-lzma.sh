@@ -12,7 +12,7 @@ clang --target=wasm32 -O3 -nostdlib -fno-builtin \
   -Wl,--export=lzma_in_ptr -Wl,--export=lzma_out_ptr \
   -Wl,--export=lzma_in_size -Wl,--export=lzma_out_size \
   -Wl,--export=lzma_in_consumed -Wl,--export=lzma_status \
-  -Wl,--export=lzma_begin -Wl,--export=lzma_feed \
+  -Wl,--export=lzma_set_output_size -Wl,--export=lzma_begin -Wl,--export=lzma_feed \
   -Wl,--export=lzma_drain -Wl,--export=lzma_end \
   -Wl,--export=bcj_in_ptr -Wl,--export=bcj_in_size \
   -Wl,--export=bcj_reset -Wl,--export=bcj_convert \
