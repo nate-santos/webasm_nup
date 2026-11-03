@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>webasm_nup — Folder to .nup, in your browser</title>
+<meta name="description" content="Convert a game dump folder into a .nup file with WebAssembly, entirely locally in your browser. No uploads. Output is written to browser storage, not held in RAM.">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="logo">⬢</span><div><h1>webasm_nup</h1><p>Folder → .nup, entirely in your browser</p></div></div>
+  <div class="badges"><span id="wasmStatus" class="badge">WASM: loading…</span><span class="badge">No uploads</span><span class="badge">NUP v1</span></div>
+</header>
+
+<main>
+  <section class="intro">
+    <p>Pack an unencrypted NX game dump into the <strong>.nup</strong> container format
+    (spec: <a href="https://github.com/a55uka/nup">a55uka/nup</a>).
+    Hashing and zstd compression run in WebAssembly, files are streamed in
+    256&nbsp;KiB chunks, and the result is written to browser storage (OPFS) —
+    so a multi-gigabyte game never has to sit whole in RAM.</p>
+    <p class="note">Your files never leave this device. Nothing is uploaded, and no
+    keys or decryption are involved: .nup holds unencrypted dumps only.</p>
+  </section>
+
+  <section class="card" id="foldersCard">
+    <h2>1 · Input folders</h2>
+    <p class="hint">Add a dump bundle (<code>base/</code> + <code>updates/</code> + <code>dlc/</code>),
+    a bare content folder (<code>exefs/</code> / <code>romfs/</code>), or several folders
+    that together make up a game. Each folder is scanned locally and its
+    packages are listed below.</p>
+    <div class="actions">
+      <button id="addFolderBtn" class="primary">＋ Add folder</button>
+      <button id="addFilesBtn">Add folder (file picker fallback)</button>
+      <input type="file" id="webkitInput" webkitdirectory multiple hidden>
+      <span id="pickerNote" class="hint"></span>
+    </div>
+    <div id="dropZone" class="dropzone">…or drop a folder here</div>
+    <div id="folderList" class="folder-list"></div>
+    <p id="folderSummary" class="summary"></p>
+  </section>
+
+  <section class="card" id="detailsCard">
+    <h2>2 · Game details</h2>
+    <p class="hint">These go into the base package's metadata (or the first package,
+    if there is no base) — title name, display version and icon TLVs.</p>
+    <div class="form-grid">
+      <label>Game name
+        <input id="gameName" type="text" placeholder="e.g. Super Game" autocomplete="off">
+      </label>
+      <label>Version
+        <input id="gameVersion" type="text" value="1.0.0" autocomplete="off">
+        <span class="hint">Dotted, e.g. <code>1.2.3</code> (also encoded numerically for the base package), or a plain number.</span>
+      </label>
+      <label>Publisher <span class="optional">(optional)</span>
+        <input id="publisher" type="text" placeholder="e.g. Acme" autocomplete="off">
+      </label>
+      <label>Icon — JPEG, exactly 256×256
+        <input id="iconInput" type="file" accept=".jpg,.jpeg,image/jpeg">
+        <span id="iconStatus" class="hint">No icon chosen. The icon is stored as TLV 0x0003.</span>
+      </label>
+    </div>
+    <div id="iconPreview" class="icon-preview" hidden><img id="iconImg" alt="Icon preview"><span>256×256 JPEG preview</span></div>
+  </section>
+
+  <section class="card" id="convertCard">
+    <h2>3 · Convert</h2>
+    <p class="hint">Output is written to browser storage first (OPFS, file
+    <code id="outputNamePreview">game.nup</code>), then you save it where you want.
+    Large files (&gt; 256&nbsp;MiB) are stored raw, like Eglantine's writer; smaller
+    files are zstd level 3, falling back to raw when compression doesn't shrink them.</p>
+    <div class="actions">
+      <button id="convertBtn" class="primary big" disabled>Convert to .nup</button>
+      <button id="cancelBtn" disabled>Cancel</button>
+    </div>
+    <div id="progressWrap" class="progress-wrap" hidden>
+      <div class="progress-bar"><div id="progressFill" class="progress-fill"></div></div>
+      <div class="progress-meta">
+        <span id="progressPct">0%</span>
+        <span id="progressFiles"></span>
+        <span id="progressBytes"></span>
+        <span id="progressTime"></span>
+      </div>
+      <p id="progressPhase" class="mono"></p>
+      <p id="progressPath" class="mono ellipsis"></p>
+    </div>
+    <p id="convertError" class="error" hidden></p>
+    <div id="result" class="result" hidden></div>
+  </section>
+
+  <section class="card small">
+    <h2>How it works</h2>
+    <ul>
+      <li><strong>WASM core:</strong> <code>nup.wasm</code> (C + upstream zstd 1.5.7, built in <code>wasm-src/</code>) does streaming SHA-256 and streaming zstd. JS only orchestrates files and writes the superblock / TOC / meta TLVs.</li>
+      <li><strong>Storage, not RAM:</strong> input is read in 256&nbsp;KiB chunks and output goes to OPFS. The only whole-file reads are the tiny <code>main.npdm</code> / <code>main</code> header used to find the title ID and build ID.</li>
+      <li><strong>Compatible layout:</strong> superblock, TOC, 16-byte-aligned extents, dedup by (size, SHA-256), <code>.listing</code> files excluded, update-only dumps flagged <code>standalone_update</code> — verified against the reference Python <code>nup verify</code> tool in <code>test/</code>.</li>
+      <li><strong>Browser support:</strong> folder picking works best in Chrome / Edge (<code>showDirectoryPicker</code>). Other browsers can use the file-picker fallback. OPFS is required for the storage-backed output; if it is unavailable, the site falls back to writing straight to a file you pick with the save dialog.</li>
+    </ul>
+  </section>
+</main>
+
+<footer>
+  <p>webasm_nup · NUP format by <a href="https://github.com/a55uka/nup">a55uka/nup</a> · C++ writer in <a href="https://github.com/Djihads80/Eglantine/tree/nx2/src/core/file_sys">Eglantine (nx2)</a> · zstd by Meta (BSD)</p>
+</footer>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
