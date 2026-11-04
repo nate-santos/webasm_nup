@@ -566,4 +566,4 @@ export async function packNup(wasm, packages, output, options = {}) {
   await output.truncate(fileSize);
   await output.close();
   return { fileSize, blobOffset, tocSize, packageCount: packages.length, dirCount, fileCount, totalBytes, uuid: hex(uuid), tally };
-      }
+}
