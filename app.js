@@ -450,6 +450,7 @@ $("convertBtn").addEventListener("click", async () => {
   $("convertBtn").disabled = true;
   $("result").hidden = true;
   $("progressWrap").hidden = false;
+  $("progressTally").textContent = "";
   const startTime = performance.now();
   let maxPct = 0;
   let out = null; // declared here so a failed run can close its writer
@@ -564,6 +565,7 @@ $("convertBtn").addEventListener("click", async () => {
         $("progressTime").textContent = fmtTime(now - startTime);
         $("progressPhase").textContent = pr.phase || "";
         $("progressPath").textContent = pr.currentPath || "";
+        if (pr.tally) $("progressTally").textContent = `Compressed: ${pr.tally.compressed} · Uncompressed: ${pr.tally.raw} · Deduplicated: ${pr.tally.dedup}`;
       },
     });
     $("progressFill").style.width = "100%";
@@ -575,6 +577,7 @@ $("convertBtn").addEventListener("click", async () => {
     const lines = [
       `Output: ${outName} (${fmtBytes(result.fileSize)}) — ${result.packageCount} package(s), ${result.dirCount} dirs, ${result.fileCount} files.`,
       `Compression: zstd level ${level} for files up to 256 MiB (larger files are stored raw; files that don't shrink are stored raw).`,
+      `Files: ${result.tally.compressed} compressed, ${result.tally.raw} stored uncompressed, ${result.tally.dedup} deduplicated (shared an earlier identical file's extent).`,
       `UUID: ${result.uuid}`,
       out.kind === "opfs"
         ? "Stored in browser storage (OPFS). Use Save as… to copy it to your computer — the copy streams in chunks, it is not loaded into RAM."
