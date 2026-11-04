@@ -316,8 +316,15 @@ export async function packNup(wasm, packages, output, options = {}) {
   const dedup = new Map(); // sha hex -> {offset, stored, codec, size}
   const sizesSeen = new Set();
   let bytesDone = 0, filesDone = 0;
+  // Final-outcome tallies, reported live via progress and returned in the
+  // result. Every finished file lands in exactly one bucket:
+  //   dedup      — shares an earlier identical file's extent (not stored again)
+  //   compressed — stored as its own zstd extent
+  //   raw        — stored as its own raw extent (empty, incompressible, or
+  //                over rawThreshold)
+  const tally = { dedup: 0, compressed: 0, raw: 0 };
   const progress = (phase, currentPath) => {
-    if (onProgress) onProgress({ filesDone, filesTotal: fileCount, bytesDone, bytesTotal: totalBytes, phase, currentPath, outputBytes: cursor });
+    if (onProgress) onProgress({ filesDone, filesTotal: fileCount, bytesDone, bytesTotal: totalBytes, phase, currentPath, outputBytes: cursor, tally: { ...tally } });
   };
   const checkCancel = () => { if (shouldCancel && shouldCancel()) throw new Error("cancelled"); };
   const fileRecs = files.map(() => ({ size: 0, offset: 0, stored: 0, sha: new Uint8Array(32), codec: CODEC_RAW }));
@@ -331,6 +338,7 @@ export async function packNup(wasm, packages, output, options = {}) {
     if (size === 0) {
       rec.sha = await wasm.hashBytes(new Uint8Array(0));
       rec.offset = 0; rec.stored = 0; rec.codec = CODEC_RAW;
+      tally.raw++;
       filesDone++; progress("empty", f.path);
       continue;
     }
@@ -354,6 +362,7 @@ export async function packNup(wasm, packages, output, options = {}) {
       const hit = dedup.get(hex(sha));
       if (hit && hit.size === size) {
         rec.sha = sha; rec.offset = hit.offset; rec.stored = hit.stored; rec.codec = hit.codec;
+        tally.dedup++;
         filesDone++; progress("shared extent (duplicate)", f.path);
         continue;
       }
@@ -424,10 +433,12 @@ export async function packNup(wasm, packages, output, options = {}) {
         }
         rec.offset = start; rec.stored = size; rec.codec = CODEC_RAW;
         cursor = start + size;
+        tally.raw++;
       } else {
         rec.sha = wasm.shaFinal();
         rec.offset = start; rec.stored = stored; rec.codec = CODEC_ZSTD;
         cursor = start + stored;
+        tally.compressed++;
       }
       dedup.set(hex(rec.sha), { offset: rec.offset, stored: rec.stored, codec: rec.codec, size });
       sizesSeen.add(size);
@@ -452,10 +463,12 @@ export async function packNup(wasm, packages, output, options = {}) {
         // be overwritten by the next extent / meta, or truncated.
         rec.sha = sha; rec.offset = hit.offset; rec.stored = hit.stored; rec.codec = hit.codec;
         cursor = start;
+        tally.dedup++;
       } else {
         rec.sha = sha; rec.offset = start; rec.stored = size; rec.codec = CODEC_RAW;
         cursor = start + size;
         dedup.set(hex(sha), { offset: start, stored: size, codec: CODEC_RAW, size });
+        tally.raw++;
       }
       sizesSeen.add(size);
     }
@@ -552,5 +565,5 @@ export async function packNup(wasm, packages, output, options = {}) {
   await output.writeAt(0x80, toc);
   await output.truncate(fileSize);
   await output.close();
-  return { fileSize, blobOffset, tocSize, packageCount: packages.length, dirCount, fileCount, totalBytes, uuid: hex(uuid) };
-}
+  return { fileSize, blobOffset, tocSize, packageCount: packages.length, dirCount, fileCount, totalBytes, uuid: hex(uuid), tally };
+      }
